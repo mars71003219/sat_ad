@@ -1,0 +1,309 @@
+services:
+  # Kafka - 메시지 버스
+  kafka:
+    image: confluentinc/cp-kafka:latest
+    container_name: kafka
+    ports:
+      - "9092:9092"
+    networks:
+      - telemetry-net
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: 'broker,controller'
+      KAFKA_CONTROLLER_QUORUM_VOTERS: '1@kafka:9093'
+      CLUSTER_ID: '${KAFKA_CLUSTER_ID}'
+      KAFKA_LISTENERS: 'PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093'
+      KAFKA_ADVERTISED_LISTENERS: 'PLAINTEXT://kafka:9092'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: 'CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT'
+      KAFKA_INTER_BROKER_LISTENER_NAME: 'PLAINTEXT'
+      KAFKA_CONTROLLER_LISTENER_NAMES: 'CONTROLLER'
+      KAFKA_LOG_DIRS: '/var/lib/kafka/data'
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    command: >
+      bash -c "
+      if [ ! -f /var/lib/kafka/data/meta.properties ]; then
+        kafka-storage format -t ${KAFKA_CLUSTER_ID} -c /etc/kafka/kraft/server.properties;
+      fi;
+      /etc/confluent/docker/run
+      "
+
+  # RabbitMQ - Celery 브로커
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      - RABBITMQ_DEFAULT_USER=guest
+      - RABBITMQ_DEFAULT_PASS=guest
+    networks:
+      - telemetry-net
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # VictoriaMetrics - 시계열 DB
+  victoria-metrics:
+    image: victoriametrics/victoria-metrics:latest
+    container_name: victoria-metrics
+    ports:
+      - "8428:8428"
+    volumes:
+      - victoria_data:/victoria-metrics-data
+    command:
+      - '--storageDataPath=/victoria-metrics-data'
+      - '--retentionPeriod=1y'
+      - '--httpListenAddr=:8428'
+    networks:
+      - telemetry-net
+    restart: unless-stopped
+
+  # Victoria Consumer - Kafka to VictoriaMetrics
+  victoria-consumer:
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM python:3.10-slim
+        WORKDIR /app
+        COPY victoria-consumer/requirements.txt .
+        RUN pip install --no-cache-dir -r requirements.txt
+        COPY victoria-consumer/ ./victoria-consumer/
+        CMD ["python", "victoria-consumer/consumer.py"]
+    container_name: victoria-consumer
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - VICTORIA_METRICS_URL=http://victoria-metrics:8428
+    depends_on:
+      - kafka
+      - victoria-metrics
+    networks:
+      - telemetry-net
+    restart: unless-stopped
+
+  # Batch Inference Trigger
+  batch-inference-trigger:
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM python:3.10-slim
+        WORKDIR /app
+        COPY shared/ ./shared/
+        COPY inference-trigger/requirements.txt ./inference-trigger/
+        RUN pip install --no-cache-dir -r inference-trigger/requirements.txt
+        COPY inference-trigger/ ./inference-trigger/
+        CMD ["python", "inference-trigger/trigger.py"]
+    container_name: batch-inference-trigger
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - KAFKA_TOPIC_TELEMETRY=satellite-telemetry
+      - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672//
+      - CELERY_RESULT_BACKEND=rpc://
+      - WINDOW_SIZE=30
+      - STRIDE=10
+      - FORECAST_HORIZON=10
+    depends_on:
+      - kafka
+      - rabbitmq
+    networks:
+      - telemetry-net
+    restart: unless-stopped
+
+  # Analysis Worker
+  analysis-worker:
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM python:3.10-slim
+        WORKDIR /app
+        COPY analysis-worker/requirements.txt .
+        RUN pip install --no-cache-dir -r requirements.txt
+        COPY analysis-worker/ ./analysis-worker/
+        CMD ["python", "analysis-worker/tasks.py"]
+    container_name: analysis-worker
+    environment:
+      - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672//
+      - CELERY_RESULT_BACKEND=rpc://
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - TRITON_SERVER_URL=triton-server:8000
+    depends_on:
+      - rabbitmq
+      - kafka
+      - triton-server
+    networks:
+      - telemetry-net
+    restart: unless-stopped
+
+  # Kafka UI
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: kafka-ui
+    ports:
+      - "8080:8080"
+    environment:
+      - KAFKA_CLUSTERS_0_NAME=local
+      - KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS=kafka:9092
+    depends_on:
+      - kafka
+    networks:
+      - telemetry-net
+
+  # Flower - Celery 모니터링
+  flower:
+    image: mher/flower:latest
+    container_name: flower
+    command: celery --broker=amqp://guest:guest@rabbitmq:5672// flower --port=5555
+    ports:
+      - "5555:5555"
+    depends_on:
+      - rabbitmq
+    networks:
+      - telemetry-net
+
+  # PostgreSQL - 시스템 설정 저장소
+  postgres:
+    image: postgres:15-alpine
+    container_name: postgres
+    environment:
+      POSTGRES_DB: telemetry_config
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: admin123
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - telemetry-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d telemetry_config"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Triton Inference Server
+  triton-server:
+    build:
+      context: .
+      dockerfile: triton-server/Dockerfile.triton
+    image: triton-server-pytorch:latest
+    container_name: triton-server
+    ports:
+      - "8000:8000"
+      - "8001:8001"
+      - "8002:8002"
+    volumes:
+      - ./triton-models:/models
+    command: >
+      tritonserver
+        --model-repository=/models
+        --strict-model-config=false
+        --log-verbose=1
+        --metrics-port=8002
+        --allow-grpc=true
+        --allow-http=true
+    networks:
+      - telemetry-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/v2/health/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+  # Operation Server - FastAPI REST API
+  operation-server:
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM python:3.10-slim
+        WORKDIR /app
+        COPY operation-server/requirements.txt .
+        RUN pip install --no-cache-dir -r requirements.txt
+        COPY operation-server/ ./operation-server/
+        ENV PYTHONPATH=/app
+        CMD ["python", "-m", "uvicorn", "operation-server.main:app", "--host", "0.0.0.0", "--port", "8003"]
+    container_name: operation-server
+    ports:
+      - "8003:8003"
+    environment:
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=telemetry_config
+      - POSTGRES_USER=admin
+      - POSTGRES_PASSWORD=admin123
+      - VICTORIA_METRICS_URL=http://victoria-metrics:8428
+    depends_on:
+      postgres:
+        condition: service_healthy
+      victoria-metrics:
+        condition: service_started
+    networks:
+      - telemetry-net
+    restart: unless-stopped
+
+  # Frontend - React Dashboard
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: frontend
+    depends_on:
+      - operation-server
+    networks:
+      - telemetry-net
+    restart: unless-stopped
+
+  # Nginx - Reverse Proxy
+  nginx:
+    image: nginx:alpine
+    container_name: nginx
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+    depends_on:
+      - frontend
+      - operation-server
+    networks:
+      - telemetry-net
+    restart: unless-stopped
+
+  # Batch Simulator - 위성 텔레메트리 배치 데이터 생성
+  batch-simulator:
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM python:3.10-slim
+        WORKDIR /app
+        COPY batch-simulator/requirements.txt .
+        RUN pip install --no-cache-dir -r requirements.txt
+        COPY batch-simulator/ .
+        CMD ["python", "simulator.py", "--kafka", "kafka:9092"]
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+    depends_on:
+      - kafka
+    networks:
+      - telemetry-net
+    profiles:
+      - tools
+
+volumes:
+  kafka_data:
+  victoria_data:
+  postgres_data:
+
+networks:
+  telemetry-net:
+    driver: bridge

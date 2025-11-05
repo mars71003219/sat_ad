@@ -1,0 +1,29 @@
+name: "transformer_thermal"
+backend: "python"
+max_batch_size: 0
+default_model_filename: "model.py"
+input [
+  {
+    name: "input_data"
+    data_type: TYPE_FP32
+    dims: [ 30, 6 ]
+  }
+]
+output [
+  {
+    name: "predictions"
+    data_type: TYPE_FP32
+    dims: [ 10, 6 ]
+  },
+  {
+    name: "anomaly_score"
+    data_type: TYPE_FP32
+    dims: [ 1 ]
+  }
+]
+instance_group [
+  {
+    count: 1
+    kind: KIND_CPU
+  }
+]

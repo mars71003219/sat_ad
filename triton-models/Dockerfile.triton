@@ -1,0 +1,15 @@
+FROM nvcr.io/nvidia/tritonserver:25.08-trtllm-python-py3
+
+# Triton Server 25.08 버전
+# - Triton Server: 2.51.0
+# - Python: 3.12.3
+# - PyTorch: 2.8.0a0+5289986c39.nv25.5
+# - TensorRT: 10.11.0.33
+# - ONNX Runtime: GPU acceleration 지원
+
+# 작업 디렉토리 설정
+WORKDIR /models
+
+# 헬스체크
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
+    CMD curl -f http://localhost:8000/v2/health/ready || exit 1
