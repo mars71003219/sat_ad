@@ -1,0 +1,38 @@
+# ==============================================================================
+# Development Overrides
+# ==============================================================================
+#
+# To debug a specific service, uncomment its section below.
+#
+# Example: To debug 'operation-server', uncomment its 'command' and 'ports'.
+#
+# Then run:
+# docker-compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+#
+# ==============================================================================
+
+services:
+  # victoria-consumer:
+  #   command: ["python", "-m", "debugpy", "--listen", "0.0.0.0:5680", "--wait-for-client", "victoria-consumer/consumer.py"]
+  #   ports:
+  #     - "5680:5680"
+
+  # batch-inference-trigger:
+  #   command: ["python", "-m", "debugpy", "--listen", "0.0.0.0:5681", "--wait-for-client", "inference-trigger/trigger.py"]
+  #   ports:
+  #     - "5681:5681"
+
+  # analysis-worker:
+  #   command: ["python", "-m", "debugpy", "--listen", "0.0.0.0:5679", "--wait-for-client", "analysis-worker/tasks.py"]
+  #   ports:
+  #     - "5679:5679"
+
+  operation-server:
+    command: ["python", "-m", "debugpy", "--listen", "0.0.0.0:5682", "--wait-for-client", "-m", "uvicorn", "operation-server.main:app", "--host", "0.0.0.0", "--port", "8003"]
+    ports:
+      - "5682:5682"
+
+  # batch-simulator:
+  #   command: ["python", "-m", "debugpy", "--listen", "0.0.0.0:5678", "--wait-for-client", "simulator.py", "--kafka", "kafka:9092", "--num-batches", "999999"]
+  #   ports:
+  #     - "5678:5678"

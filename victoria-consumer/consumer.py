@@ -181,12 +181,16 @@ def process_inference_result(data: Dict[str, Any]):
                     timestamp_ms
                 ))
 
-            # Predictions statistics
+            # Predictions - 각 예측 스텝을 개별 타임스탬프로 저장
             predictions = data.get('predictions', [])
+            window_index = data.get('window_index', 0)
+            batch_id = data.get('batch_id', '')
+
             if predictions and isinstance(predictions, list) and len(predictions) > 0:
                 import numpy as np
                 pred_array = np.array(predictions)
 
+                # 예측값 통계 (전체)
                 metrics.append(format_prometheus_metric(
                     'inference_prediction_mean',
                     float(np.mean(pred_array)),
@@ -214,6 +218,58 @@ def process_inference_result(data: Dict[str, Any]):
                     labels,
                     timestamp_ms
                 ))
+
+                # 각 예측 스텝을 개별 타임스탬프로 저장
+                # window_index: 윈도우 시작 인덱스
+                # predictions: [forecast_steps, features] - 10개 스텝, 각 스텝마다 여러 특징
+                # 각 레코드는 30초 간격이므로, 예측 시작 시간 = 현재 시간 + (step_idx * 30초)
+
+                subsystem = labels.get('subsystem')
+                logger.info(f"Storing {len(predictions)} prediction steps for {labels.get('satellite_id')}/{subsystem}")
+
+                for step_idx, pred_values in enumerate(predictions):
+                    # 예측 대상 시간 계산: 윈도우 끝 시간 + 스텝 간격
+                    pred_timestamp_ms = timestamp_ms + (step_idx * 30 * 1000)  # 30초 간격
+
+                    if isinstance(pred_values, (list, np.ndarray)):
+                        # 1. 각 특징별로 개별 메트릭 저장
+                        for feature_idx, feature_value in enumerate(pred_values):
+                            feature_labels = labels.copy()
+                            feature_labels['forecast_step'] = str(step_idx)
+                            feature_labels['feature_index'] = str(feature_idx)
+
+                            metrics.append(format_prometheus_metric(
+                                'inference_prediction_feature',
+                                float(feature_value),
+                                feature_labels,
+                                pred_timestamp_ms
+                            ))
+
+                        # 2. 종합 예측값 (모든 특징의 평균) 저장
+                        avg_value = float(np.mean(pred_values))
+                        avg_labels = labels.copy()
+                        avg_labels['forecast_step'] = str(step_idx)
+
+                        metrics.append(format_prometheus_metric(
+                            'inference_prediction_mean',
+                            avg_value,
+                            avg_labels,
+                            pred_timestamp_ms
+                        ))
+                    else:
+                        # 단일 값인 경우
+                        pred_labels = labels.copy()
+                        pred_labels['forecast_step'] = str(step_idx)
+
+                        metrics.append(format_prometheus_metric(
+                            'inference_prediction_mean',
+                            float(pred_values),
+                            pred_labels,
+                            pred_timestamp_ms
+                        ))
+
+                total_metrics = len([m for m in metrics if 'inference_prediction' in m])
+                logger.debug(f"Created {total_metrics} prediction metrics for {subsystem}")
 
             # Confidence statistics
             confidence = data.get('confidence')

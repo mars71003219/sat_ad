@@ -16,37 +16,31 @@ router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 
 @router.get("/stats")
 async def get_dashboard_stats():
-    """대시보드 통계"""
+    """대시보드 통계 (캐싱 최적화)"""
     try:
-        # 추론 통계
+        # 캐싱된 데이터 사용으로 빠른 응답
         inference_stats = victoria_client.get_inference_statistics()
-
-        # 위성 수
         satellites = postgres_client.get_all_satellites()
-
-        # 최근 추론 결과
-        recent_inferences = victoria_client.get_recent_inference_results(limit=10)
 
         return {
             "inference_stats": inference_stats,
             "total_satellites": len(satellites),
             "active_satellites": sum(1 for s in satellites if s.get('monitoring_enabled')),
-            "recent_inferences": recent_inferences
+            "satellites": satellites
         }
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/anomalies")
-async def get_recent_anomalies(hours: int = 24):
-    """최근 이상 감지"""
+@router.get("/features")
+async def get_subsystem_features(subsystem: str):
+    """서브시스템의 특징 목록 조회"""
     try:
-        anomalies = victoria_client.get_anomaly_trend(hours=hours)
+        features = victoria_client.get_subsystem_features(subsystem)
         return {
-            "anomalies": anomalies,
-            "count": len(anomalies),
-            "hours": hours
+            "subsystem": subsystem,
+            "features": features
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

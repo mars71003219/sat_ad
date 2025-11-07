@@ -123,7 +123,7 @@ class BatchSatelliteSimulator:
                 'satellite_wheel_3_rpm': random.uniform(1000, 3000),
                 'satellite_altitude': 500 + random.gauss(0, 10),
                 'satellite_velocity': 7.5 + random.gauss(0, 0.1),
-
+                
                 # Comm 채널 (통신 시스템)
                 'satellite_rssi': -80 + random.gauss(0, 10),
                 'satellite_data_backlog': random.uniform(0, 100),
@@ -210,7 +210,7 @@ def run_multi_satellite_batch_simulation(
         num_batches: 각 위성이 전송할 배치 수
     """
     print("=" * 80)
-    print("🛰️  배치 기반 위성 텔레메트리 시뮬레이터")
+    print("️  배치 기반 위성 텔레메트리 시뮬레이터")
     print("=" * 80)
     print(f"위성 개수:            {num_satellites}")
     print(f"배치 기간:            {batch_duration}초 ({batch_duration/60:.1f}분)")
@@ -257,7 +257,7 @@ def run_multi_satellite_batch_simulation(
             time.sleep(inter_batch_delay)
 
     print("\n" + "="*80)
-    print("✅ 배치 시뮬레이션 완료")
+    print(" 배치 시뮬레이션 완료")
     print("="*80)
 
 
@@ -270,7 +270,7 @@ if __name__ == '__main__':
     parser.add_argument('--batch-duration', type=int, default=32400,
                         help='Batch duration in seconds (default: 32400 = 9 hours, 1080 records at 30s interval)')
     parser.add_argument('--inter-batch-delay', type=int, default=5,
-                        help='Delay between batch rounds in seconds (default: 60)')
+                        help='Delay between batch rounds in seconds (default: 5)')
     parser.add_argument('--num-batches', type=int, default=5,
                         help='Number of batches per satellite (default: 5)')
 

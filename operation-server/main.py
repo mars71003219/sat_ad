@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 # Add operation-server to Python path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from api.routes import dashboard, config, inference
+from api.routes import dashboard, config, websocket
 
 # Logging
 logging.basicConfig(
@@ -39,7 +39,7 @@ app.add_middleware(
 # Routes
 app.include_router(dashboard.router)
 app.include_router(config.router)
-app.include_router(inference.router)
+app.include_router(websocket.router)
 
 
 @app.get("/")

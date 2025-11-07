@@ -22,6 +22,12 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+      # 데이터 보존 설정 (개발 환경)
+      KAFKA_LOG_RETENTION_HOURS: 1  # 1시간만 보관
+      KAFKA_LOG_RETENTION_BYTES: 104857600  # 100MB로 제한
+      KAFKA_LOG_SEGMENT_BYTES: 10485760  # 10MB 세그먼트
+      KAFKA_LOG_RETENTION_CHECK_INTERVAL_MS: 60000  # 1분마다 체크
+      KAFKA_LOG_CLEANUP_POLICY: 'delete'
     volumes:
       - kafka_data:/var/lib/kafka/data
     command: >
@@ -60,8 +66,11 @@ services:
       - victoria_data:/victoria-metrics-data
     command:
       - '--storageDataPath=/victoria-metrics-data'
-      - '--retentionPeriod=1y'
+      - '--retentionPeriod=1d'  # 1일만 보관 (개발 환경, 최소값)
       - '--httpListenAddr=:8428'
+      - '--search.maxUniqueTimeseries=10000000'  # 최대 시계열 수 증가 (기본값의 2배)
+      - '--memory.allowedPercent=80'  # 메모리 사용률 증가 (기본 60% -> 80%)
+    mem_limit: 8g  # 메모리 제한 8GB
     networks:
       - telemetry-net
     restart: unless-stopped
@@ -175,6 +184,24 @@ services:
       POSTGRES_DB: telemetry_config
       POSTGRES_USER: admin
       POSTGRES_PASSWORD: admin123
+      # 개발 환경 최적화
+      POSTGRES_MAX_CONNECTIONS: 50
+      POSTGRES_SHARED_BUFFERS: 128MB
+      POSTGRES_EFFECTIVE_CACHE_SIZE: 256MB
+    command:
+      - "postgres"
+      - "-c"
+      - "max_connections=50"
+      - "-c"
+      - "shared_buffers=128MB"
+      - "-c"
+      - "effective_cache_size=256MB"
+      - "-c"
+      - "autovacuum=on"
+      - "-c"
+      - "autovacuum_max_workers=2"
+      - "-c"
+      - "maintenance_work_mem=64MB"
     ports:
       - "5432:5432"
     volumes:
@@ -193,7 +220,7 @@ services:
   triton-server:
     build:
       context: .
-      dockerfile: triton-server/Dockerfile.triton
+      dockerfile: triton-models/Dockerfile.triton
     image: triton-server-pytorch:latest
     container_name: triton-server
     ports:
@@ -231,7 +258,7 @@ services:
         RUN pip install --no-cache-dir -r requirements.txt
         COPY operation-server/ ./operation-server/
         ENV PYTHONPATH=/app
-        CMD ["python", "-m", "uvicorn", "operation-server.main:app", "--host", "0.0.0.0", "--port", "8003"]
+        CMD ["python", "-m", "uvicorn", "operation-server.main:app", "--host", "0.0.0.0", "--port", "8003", "--ws", "websockets"]
     container_name: operation-server
     ports:
       - "8003:8003"
@@ -289,15 +316,14 @@ services:
         COPY batch-simulator/requirements.txt .
         RUN pip install --no-cache-dir -r requirements.txt
         COPY batch-simulator/ .
-        CMD ["python", "simulator.py", "--kafka", "kafka:9092"]
+        CMD ["python", "simulator.py", "--kafka", "kafka:9092", "--num-batches", "999999"]
     environment:
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
     depends_on:
       - kafka
     networks:
       - telemetry-net
-    profiles:
-      - tools
+    restart: unless-stopped
 
 volumes:
   kafka_data:

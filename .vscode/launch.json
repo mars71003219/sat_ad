@@ -1,0 +1,85 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Attach to Batch Simulator",
+            "type": "python",
+            "request": "attach",
+            "connect": {
+                "host": "localhost",
+                "port": 5678
+            },
+            "pathMappings": [
+                {
+                    "localRoot": "${workspaceFolder}/batch-simulator",
+                    "remoteRoot": "/app"
+                }
+            ],
+            "justMyCode": true
+        },
+        {
+            "name": "Attach to Analysis Worker",
+            "type": "python",
+            "request": "attach",
+            "connect": {
+                "host": "localhost",
+                "port": 5679
+            },
+            "pathMappings": [
+                {
+                    "localRoot": "${workspaceFolder}/analysis-worker",
+                    "remoteRoot": "/app/analysis-worker"
+                }
+            ],
+            "justMyCode": true
+        },
+        {
+            "name": "Attach to Victoria Consumer",
+            "type": "python",
+            "request": "attach",
+            "connect": {
+                "host": "localhost",
+                "port": 5680
+            },
+            "pathMappings": [
+                {
+                    "localRoot": "${workspaceFolder}/victoria-consumer",
+                    "remoteRoot": "/app/victoria-consumer"
+                }
+            ],
+            "justMyCode": true
+        },
+        {
+            "name": "Attach to Inference Trigger",
+            "type": "python",
+            "request": "attach",
+            "connect": {
+                "host": "localhost",
+                "port": 5681
+            },
+            "pathMappings": [
+                {
+                    "localRoot": "${workspaceFolder}/inference-trigger",
+                    "remoteRoot": "/app/inference-trigger"
+                }
+            ],
+            "justMyCode": true
+        },
+        {
+            "name": "Attach to Operation Server",
+            "type": "python",
+            "request": "attach",
+            "connect": {
+                "host": "localhost",
+                "port": 5682
+            },
+            "pathMappings": [
+                {
+                    "localRoot": "${workspaceFolder}/operation-server",
+                    "remoteRoot": "/app/operation-server"
+                }
+            ],
+            "justMyCode": true
+        }
+    ]
+}
