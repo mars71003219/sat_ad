@@ -1,1 +1,4 @@
 **/venv/
+
+# Frontend dependencies
+/frontend/node_modules

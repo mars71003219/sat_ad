@@ -61,8 +61,8 @@ async def websocket_dashboard(websocket: WebSocket):
             import time
             t0 = time.time()
 
-            inferences = await asyncio.to_thread(
-                victoria_client.get_recent_inference_results,
+            # httpx async로 직접 호출 (asyncio.to_thread 제거)
+            inferences = await victoria_client.get_recent_inference_results(
                 limit=10,
                 satellite_id=filters['satellite_id'],
                 subsystem=filters['subsystem'],
@@ -154,8 +154,8 @@ async def websocket_trends(websocket: WebSocket):
             end_dt = datetime.fromisoformat(filters['end_time'].replace('Z', '+00:00'))
             t1 = time.time()
 
-            data_points = await asyncio.to_thread(
-                victoria_client.get_anomaly_score_trend,
+            # httpx async로 직접 호출 (asyncio.to_thread 제거)
+            data_points = await victoria_client.get_anomaly_score_trend(
                 satellite_id=filters['satellite_id'],
                 subsystem=filters['subsystem'],
                 start_time=start_dt,

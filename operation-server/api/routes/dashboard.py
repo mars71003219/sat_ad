@@ -19,7 +19,7 @@ async def get_dashboard_stats():
     """대시보드 통계 (캐싱 최적화)"""
     try:
         # 캐싱된 데이터 사용으로 빠른 응답
-        inference_stats = victoria_client.get_inference_statistics()
+        inference_stats = await victoria_client.get_inference_statistics()
         satellites = postgres_client.get_all_satellites()
 
         return {

@@ -1,18 +1,19 @@
 """
-VictoriaMetrics 클라이언트
+VictoriaMetrics 클라이언트 (Async httpx)
 시계열 데이터 및 추론 결과 조회
 """
 import os
 import logging
-import requests
+import httpx
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timedelta
+import asyncio
 
 logger = logging.getLogger(__name__)
 
 
 class VictoriaMetricsClient:
-    """VictoriaMetrics 클라이언트"""
+    """VictoriaMetrics 비동기 클라이언트"""
 
     # 서브시스템별 특징 매핑
     SUBSYSTEM_FEATURES = {
@@ -42,15 +43,33 @@ class VictoriaMetricsClient:
         self.range_query_url = f"{self.base_url}/api/v1/query_range"
         self._stats_cache = None
         self._stats_cache_time = 0
+        # httpx AsyncClient (연결 풀링, 재사용)
+        self._client: Optional[httpx.AsyncClient] = None
 
-    def query(self, query: str, time: Optional[str] = None) -> Optional[Dict[str, Any]]:
-        """PromQL 쿼리 실행"""
+    async def _get_client(self) -> httpx.AsyncClient:
+        """httpx AsyncClient 인스턴스 가져오기 (재사용)"""
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.AsyncClient(
+                timeout=httpx.Timeout(10.0, connect=5.0),
+                limits=httpx.Limits(max_connections=50, max_keepalive_connections=10)
+            )
+        return self._client
+
+    async def close(self):
+        """클라이언트 연결 종료"""
+        if self._client and not self._client.is_closed:
+            await self._client.aclose()
+            logger.info("VictoriaMetrics httpx client closed")
+
+    async def query(self, query: str, time: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """PromQL 쿼리 실행 (비동기)"""
         try:
             params = {"query": query}
             if time:
                 params["time"] = time
 
-            response = requests.get(self.query_url, params=params, timeout=10)
+            client = await self._get_client()
+            response = await client.get(self.query_url, params=params)
             response.raise_for_status()
 
             data = response.json()
@@ -64,36 +83,33 @@ class VictoriaMetricsClient:
             logger.error(f"Error querying VictoriaMetrics: {e}")
             return None
 
-    def get_recent_inference_results(
+    async def get_recent_inference_results(
         self,
         limit: int = 10,
         satellite_id: str = None,
         subsystem: str = None,
         feature_index: int = None
     ) -> List[Dict[str, Any]]:
-        """최근 추론 결과 조회 (instant query로 최적화)"""
+        """최근 추론 결과 조회 (비동기 병렬 쿼리)"""
         try:
-            # satellite_id와 subsystem은 필수 (없으면 빈 리스트 반환)
+            # satellite_id와 subsystem은 필수
             if not satellite_id or not subsystem:
                 logger.warning("satellite_id and subsystem are required for recent inference query")
                 return []
 
-            # feature_index 결정 (지정되지 않으면 0)
+            # feature_index 결정
             feature_idx = feature_index if feature_index is not None else 0
 
-            # 최근 5분간의 데이터 조회 (충분한 데이터 포인트)
+            # 최근 5분간의 데이터 조회
             end_time = int(datetime.now().timestamp())
             start_time = end_time - 300  # 5분
 
-            # 필수 필터 포함한 쿼리 생성
+            # 쿼리 생성
             score_query = f'inference_anomaly_score{{satellite_id="{satellite_id}",subsystem="{subsystem}"}}'
             pred_query = f'inference_prediction_feature{{satellite_id="{satellite_id}",subsystem="{subsystem}",feature_index="{feature_idx}"}}'
 
-            # 병렬 쿼리 실행 (타임아웃 2초로 단축)
-            import concurrent.futures
-
-            def fetch_metric(query_type_query):
-                query_type, query = query_type_query
+            # 비동기 병렬 쿼리 실행
+            async def fetch_metric(query_type: str, query: str):
                 params = {
                     "query": query,
                     "start": start_time,
@@ -101,8 +117,9 @@ class VictoriaMetricsClient:
                     "step": "30s"
                 }
                 try:
-                    response = requests.get(self.range_query_url, params=params, timeout=2)
-                    if response.ok:
+                    client = await self._get_client()
+                    response = await client.get(self.range_query_url, params=params, timeout=2.0)
+                    if response.status_code == 200:
                         data = response.json()
                         if data.get("status") == "success":
                             return query_type, data.get("data", {}).get("result", [])
@@ -110,18 +127,20 @@ class VictoriaMetricsClient:
                     logger.error(f"Query {query_type} failed: {e}")
                 return query_type, []
 
+            # asyncio.gather로 병렬 실행
+            results = await asyncio.gather(
+                fetch_metric('score', score_query),
+                fetch_metric('pred', pred_query),
+                return_exceptions=True
+            )
+
             query_results = {}
-            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-                futures = {
-                    executor.submit(fetch_metric, ('score', score_query)): 'score',
-                    executor.submit(fetch_metric, ('pred', pred_query)): 'pred'
-                }
-                for future in concurrent.futures.as_completed(futures, timeout=3):
-                    try:
-                        query_type, data = future.result()
-                        query_results[query_type] = data
-                    except Exception as e:
-                        logger.error(f"Parallel query error: {e}")
+            for result in results:
+                if isinstance(result, tuple):
+                    query_type, data = result
+                    query_results[query_type] = data
+                else:
+                    logger.error(f"Query error: {result}")
 
             # 타임스탬프별로 데이터 분류
             from collections import defaultdict
@@ -159,18 +178,18 @@ class VictoriaMetricsClient:
                     inference_data[key][timestamp]['subsystem'] = sub
                     inference_data[key][timestamp]['timestamp'] = timestamp
 
-            # 모든 타임스탬프를 펼쳐서 리스트로 변환
+            # 모든 타임스탬프를 리스트로 변환
             all_inferences = []
             for key, timestamps in inference_data.items():
                 for ts, data in timestamps.items():
                     all_inferences.append(data)
 
-            # timestamp 기준 역순 정렬하여 최근 N개 선택
+            # timestamp 기준 역순 정렬
             all_inferences.sort(key=lambda x: x.get('timestamp', 0), reverse=True)
             recent_inferences = all_inferences[:limit]
 
-            # actual 값 조회 (선택된 추론 결과에 대해서만)
-            for inference in recent_inferences:
+            # actual 값 조회 (병렬)
+            async def fetch_actual(inference):
                 sat_id = inference.get('satellite_id')
                 sub = inference.get('subsystem')
 
@@ -179,7 +198,7 @@ class VictoriaMetricsClient:
                     if feature_idx < len(features):
                         metric_name = features[feature_idx]
                         actual_query = f'{metric_name}{{satellite_id="{sat_id}"}}'
-                        actual_result = self.query(actual_query)
+                        actual_result = await self.query(actual_query)
 
                         if actual_result and actual_result.get('result'):
                             actual_value = actual_result['result'][0].get('value', [])
@@ -195,6 +214,10 @@ class VictoriaMetricsClient:
                 else:
                     inference['actual_value'] = None
                     inference['feature_name'] = 'N/A'
+                return inference
+
+            # actual 값 병렬 조회
+            await asyncio.gather(*[fetch_actual(inf) for inf in recent_inferences])
 
             # 결과 리스트 생성
             results = []
@@ -216,7 +239,7 @@ class VictoriaMetricsClient:
             logger.error(f"Error getting recent inferences: {e}")
             return []
 
-    def get_inference_statistics(self) -> Dict[str, Any]:
+    async def get_inference_statistics(self) -> Dict[str, Any]:
         """추론 통계 조회 (5초 캐싱)"""
         try:
             import time
@@ -226,15 +249,16 @@ class VictoriaMetricsClient:
             if self._stats_cache and (current_time - self._stats_cache_time) < 5:
                 return self._stats_cache
 
-            from datetime import datetime
-
-            # 간단한 통계: 현재 시계열 개수만 카운트 (빠름)
+            # 병렬 쿼리
             total_query = 'count(inference_anomaly_score)'
-            total_result = self.query(total_query)
-
             anomaly_query = 'count(inference_anomaly_score > 0.7)'
-            anomaly_result = self.query(anomaly_query)
 
+            results = await asyncio.gather(
+                self.query(total_query),
+                self.query(anomaly_query)
+            )
+
+            total_result, anomaly_result = results
             total_count = 0
             anomaly_count = 0
 
@@ -266,7 +290,7 @@ class VictoriaMetricsClient:
                 'anomaly_rate': 0.0
             }
 
-    def get_anomaly_score_trend(
+    async def get_anomaly_score_trend(
         self,
         satellite_id: str,
         subsystem: str,
@@ -274,12 +298,12 @@ class VictoriaMetricsClient:
         end_time: datetime,
         feature_index: int = None
     ) -> List[Dict[str, Any]]:
-        """특정 위성/서브시스템의 실측값, 예측값, anomaly score 트렌드 조회"""
+        """특정 위성/서브시스템의 트렌드 조회 (비동기 병렬 쿼리)"""
         try:
             start_ts = int(start_time.timestamp())
             end_ts = int(end_time.timestamp())
 
-            # 시간 범위에 따라 step 조정 (큰 step으로 데이터 포인트 감소)
+            # 시간 범위에 따라 step 조정
             duration_seconds = end_ts - start_ts
             if duration_seconds <= 300:  # 5분 이하
                 step = "10s"
@@ -292,15 +316,12 @@ class VictoriaMetricsClient:
             else:  # 6시간 초과
                 step = "5m"
 
-            # 특징 인덱스가 지정된 경우 해당 특징만, 아니면 첫 번째 특징 (대표)
+            # 특징 결정
             features = self.SUBSYSTEM_FEATURES.get(subsystem, ['satellite_battery_voltage'])
             if feature_index is not None and 0 <= feature_index < len(features):
                 metric_name = features[feature_index]
             else:
-                metric_name = features[0]  # 대표 특징
-
-            # ★ 병렬 쿼리 최적화: 3개 쿼리를 동시 실행 ★
-            import concurrent.futures
+                metric_name = features[0]
 
             # 예측값 쿼리
             if feature_index is not None:
@@ -315,8 +336,7 @@ class VictoriaMetricsClient:
                 'anomaly': f'inference_anomaly_score{{satellite_id="{satellite_id}",subsystem="{subsystem}"}}'
             }
 
-            def fetch_metric(query_type_query):
-                query_type, query = query_type_query
+            async def fetch_metric(query_type: str, query: str):
                 params = {
                     "query": query,
                     "start": start_ts,
@@ -324,10 +344,10 @@ class VictoriaMetricsClient:
                     "step": step
                 }
                 try:
-                    # 시간 범위에 따라 타임아웃 동적 조정
-                    timeout = min(10, max(3, duration_seconds / 3600))  # 3-10초
-                    response = requests.get(self.range_query_url, params=params, timeout=timeout)
-                    if response.ok:
+                    timeout = min(10.0, max(3.0, duration_seconds / 3600))
+                    client = await self._get_client()
+                    response = await client.get(self.range_query_url, params=params, timeout=timeout)
+                    if response.status_code == 200:
                         data = response.json()
                         if data.get("status") == "success":
                             return query_type, data.get("data", {}).get("result", [])
@@ -335,18 +355,21 @@ class VictoriaMetricsClient:
                     logger.error(f"Query {query_type} failed: {e}")
                 return query_type, []
 
-            # 병렬 실행 (타임아웃 15초로 증가)
-            result = {}
-            with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
-                futures = {executor.submit(fetch_metric, (k, v)): k for k, v in queries.items()}
-                for future in concurrent.futures.as_completed(futures, timeout=15):
-                    try:
-                        query_type, data = future.result()
-                        result[query_type] = data
-                    except Exception as e:
-                        logger.error(f"Parallel query error: {e}")
+            # 비동기 병렬 실행
+            results = await asyncio.gather(
+                *[fetch_metric(k, v) for k, v in queries.items()],
+                return_exceptions=True
+            )
 
-            # 병렬 쿼리 결과 처리
+            result = {}
+            for res in results:
+                if isinstance(res, tuple):
+                    query_type, data = res
+                    result[query_type] = data
+                else:
+                    logger.error(f"Query error: {res}")
+
+            # 데이터 처리
             from collections import defaultdict
             actual_dict = {}
             pred_dict = defaultdict(list)
@@ -367,10 +390,10 @@ class VictoriaMetricsClient:
                 for v in series.get('values', []):
                     score_dict[v[0]] = float(v[1])
 
-            # 예측값 평균 계산
-            pred_avg_dict = {ts: sum(vals)/len(vals) for ts, vals in pred_dict.items()}
+            # 예측값 평균
+            pred_avg_dict = {ts: sum(vals)/len(vals) for ts, vals in pred_dict.items() if vals}
 
-            # 데이터 포인트 생성 (actual 기준)
+            # 데이터 포인트 생성
             data_points = []
             for timestamp, actual_value in sorted(actual_dict.items()):
                 data_points.append({
@@ -380,7 +403,7 @@ class VictoriaMetricsClient:
                     'anomaly_score': score_dict.get(timestamp)
                 })
 
-            logger.info(f"Retrieved {len(data_points)} data points for {satellite_id}/{subsystem} (parallel optimized)")
+            logger.info(f"Retrieved {len(data_points)} data points for {satellite_id}/{subsystem} (async optimized)")
             return data_points
 
         except Exception as e:
@@ -388,7 +411,7 @@ class VictoriaMetricsClient:
             return []
 
     def get_subsystem_features(self, subsystem: str) -> List[Dict[str, Any]]:
-        """서브시스템의 특징 목록 반환"""
+        """서브시스템의 특징 목록 반환 (동기)"""
         feature_names = {
             'eps': [
                 'Battery Voltage', 'Battery SOC', 'Battery Current', 'Battery Temp',

@@ -254,6 +254,7 @@ services:
       dockerfile_inline: |
         FROM python:3.10-slim
         WORKDIR /app
+        RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
         COPY operation-server/requirements.txt .
         RUN pip install --no-cache-dir -r requirements.txt
         COPY operation-server/ ./operation-server/
@@ -269,11 +270,18 @@ services:
       - POSTGRES_USER=admin
       - POSTGRES_PASSWORD=admin123
       - VICTORIA_METRICS_URL=http://victoria-metrics:8428
+      - LOG_LEVEL=INFO  # DEBUG, INFO, WARNING, ERROR, CRITICAL
     depends_on:
       postgres:
         condition: service_healthy
       victoria-metrics:
         condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     networks:
       - telemetry-net
     restart: unless-stopped
