@@ -18,7 +18,7 @@ from tritonclient.utils import InferenceServerException
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
-from celery import Celery
+from celery import Celery, signals
 from confluent_kafka import Producer
 
 # Logging
@@ -40,6 +40,51 @@ KAFKA_BOOTSTRAP_SERVERS = os.getenv('KAFKA_BOOTSTRAP_SERVERS', 'kafka:9092')
 
 # Triton 클라이언트 설정
 TRITON_URL = os.getenv('TRITON_SERVER_URL', 'triton-server:8000')
+
+# 전역 클라이언트 (워커 프로세스당 1개)
+_triton_client = None
+_kafka_producer = None
+
+
+@signals.worker_process_init.connect
+def init_worker_process(**kwargs):
+    """워커 프로세스 초기화 시 클라이언트 생성 (재사용)"""
+    global _triton_client, _kafka_producer
+
+    logger.info("Initializing worker process clients...")
+
+    # Triton 클라이언트 초기화
+    try:
+        _triton_client = httpclient.InferenceServerClient(url=TRITON_URL)
+        logger.info(f"Triton client initialized: {TRITON_URL}")
+    except Exception as e:
+        logger.error(f"Failed to initialize Triton client: {e}")
+        _triton_client = None
+
+    # Kafka Producer 초기화
+    try:
+        producer_config = {
+            'bootstrap.servers': KAFKA_BOOTSTRAP_SERVERS,
+            'linger.ms': 10,
+            'batch.size': 16384
+        }
+        _kafka_producer = Producer(producer_config)
+        logger.info(f"Kafka producer initialized: {KAFKA_BOOTSTRAP_SERVERS}")
+    except Exception as e:
+        logger.error(f"Failed to initialize Kafka producer: {e}")
+        _kafka_producer = None
+
+
+@signals.worker_process_shutdown.connect
+def shutdown_worker_process(**kwargs):
+    """워커 프로세스 종료 시 클라이언트 정리"""
+    global _kafka_producer
+
+    logger.info("Shutting down worker process clients...")
+
+    if _kafka_producer:
+        _kafka_producer.flush(timeout=5)
+        logger.info("Kafka producer flushed")
 
 
 @celery_app.task(name='analysis_server.tasks.run_subsystem_inference')
@@ -76,8 +121,13 @@ def run_subsystem_inference(
     start_time = time.time()
 
     try:
-        # Triton 클라이언트 생성
-        triton_client = httpclient.InferenceServerClient(url=TRITON_URL)
+        # 전역 Triton 클라이언트 사용 (재사용)
+        global _triton_client
+
+        if _triton_client is None:
+            # 클라이언트가 없으면 생성 (fallback)
+            _triton_client = httpclient.InferenceServerClient(url=TRITON_URL)
+            logger.warning("Triton client not initialized, creating new one")
 
         # 입력 데이터를 NumPy 배열로 변환
         input_array = np.array(input_data, dtype=np.float32)  # [sequence_length, features]
@@ -94,9 +144,9 @@ def run_subsystem_inference(
             httpclient.InferRequestedOutput("anomaly_score")
         ]
 
-        # Triton 서버로 추론 요청
-        logger.info(f"Calling Triton server: {TRITON_URL}/{model_name}")
-        response = triton_client.infer(
+        # Triton 서버로 추론 요청 (재사용된 클라이언트 사용)
+        logger.debug(f"Calling Triton server: {TRITON_URL}/{model_name}")
+        response = _triton_client.infer(
             model_name=model_name,
             inputs=inputs,
             outputs=outputs
@@ -176,19 +226,24 @@ def run_subsystem_inference(
 
 
 def publish_inference_result(result: Dict[str, Any]):
-    """Kafka로 추론 결과 발행"""
-    producer = None
+    """Kafka로 추론 결과 발행 (전역 Producer 재사용)"""
+    global _kafka_producer
+
     try:
         topic = 'inference-results'
         job_id = result.get('job_id', 'unknown')
-        logger.info(f"Publishing result to Kafka topic '{topic}': {job_id}")
+        logger.debug(f"Publishing result to Kafka topic '{topic}': {job_id}")
 
-        # 각 작업마다 새로운 Producer 생성 (Celery fork 문제 회피)
-        kafka_conf = {
-            'bootstrap.servers': KAFKA_BOOTSTRAP_SERVERS,
-            'client.id': job_id
-        }
-        producer = Producer(kafka_conf)
+        # 전역 Producer 사용 (재사용)
+        if _kafka_producer is None:
+            # Fallback: Producer가 없으면 생성
+            kafka_conf = {
+                'bootstrap.servers': KAFKA_BOOTSTRAP_SERVERS,
+                'linger.ms': 10,
+                'batch.size': 16384
+            }
+            _kafka_producer = Producer(kafka_conf)
+            logger.warning("Kafka producer not initialized, creating new one")
 
         message = json.dumps(result)
 
@@ -196,25 +251,19 @@ def publish_inference_result(result: Dict[str, Any]):
             if err is not None:
                 logger.error(f"Kafka delivery failed for {job_id}: {err}")
             else:
-                logger.info(f"Successfully published result to Kafka: {job_id} (partition {msg.partition()}, offset {msg.offset()})")
+                logger.debug(f"Successfully published result to Kafka: {job_id}")
 
-        producer.produce(
+        _kafka_producer.produce(
             topic,
             key=job_id.encode('utf-8'),
             value=message.encode('utf-8'),
             callback=delivery_report
         )
-        producer.flush(timeout=10)  # 최대 10초 대기
-        logger.info(f"Flush completed for {job_id}")
+        # Poll을 호출하여 delivery callback 실행
+        _kafka_producer.poll(0)
 
     except Exception as e:
         logger.error(f"Failed to publish result: {e}", exc_info=True)
-    finally:
-        if producer:
-            try:
-                producer.flush()
-            except:
-                pass
 
 
 if __name__ == '__main__':

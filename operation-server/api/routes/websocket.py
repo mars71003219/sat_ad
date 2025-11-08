@@ -47,13 +47,26 @@ manager = ConnectionManager()
 @router.websocket("/dashboard")
 async def websocket_dashboard(websocket: WebSocket):
     """
-    대시보드 실시간 데이터 스트리밍 (비동기 처리)
+    대시보드 실시간 데이터 스트리밍 (비동기 처리 + Heartbeat)
     """
     await manager.connect(websocket)
 
     # 필터 상태 유지
     current_filters = {"satellite_id": None, "subsystem": None, "feature_index": None}
     fetch_task = None
+    heartbeat_task = None
+
+    async def send_heartbeat():
+        """30초마다 heartbeat 전송"""
+        try:
+            while True:
+                await asyncio.sleep(30)
+                await websocket.send_json({"type": "ping"})
+                logger.debug("Heartbeat sent")
+        except asyncio.CancelledError:
+            logger.debug("Heartbeat task cancelled")
+        except Exception as e:
+            logger.error(f"Heartbeat error: {e}")
 
     async def fetch_and_send_data(filters: dict):
         """데이터 조회 및 전송 (별도 태스크)"""
@@ -61,7 +74,7 @@ async def websocket_dashboard(websocket: WebSocket):
             import time
             t0 = time.time()
 
-            # httpx async로 직접 호출 (asyncio.to_thread 제거)
+            # httpx async로 직접 호출
             inferences = await victoria_client.get_recent_inference_results(
                 limit=10,
                 satellite_id=filters['satellite_id'],
@@ -90,9 +103,17 @@ async def websocket_dashboard(websocket: WebSocket):
                 pass
 
     try:
+        # Heartbeat 태스크 시작
+        heartbeat_task = asyncio.create_task(send_heartbeat())
+
         while True:
             data = await websocket.receive_text()
             filters = json.loads(data)
+
+            # Pong 응답 처리
+            if filters.get('type') == 'pong':
+                logger.debug("Received pong from client")
+                continue
 
             # 필터 업데이트
             current_filters.update({
@@ -115,14 +136,25 @@ async def websocket_dashboard(websocket: WebSocket):
             fetch_task = asyncio.create_task(fetch_and_send_data(current_filters.copy()))
 
     except WebSocketDisconnect:
-        if fetch_task:
-            fetch_task.cancel()
-        manager.disconnect(websocket)
-        logger.info("Client disconnected normally")
+        logger.info("Dashboard WebSocket disconnected")
     except Exception as e:
-        if fetch_task:
+        logger.error(f"WebSocket error: {e}", exc_info=True)
+    finally:
+        # 태스크 정리
+        if fetch_task and not fetch_task.done():
             fetch_task.cancel()
-        logger.error(f"WebSocket error: {e}")
+            try:
+                await fetch_task
+            except asyncio.CancelledError:
+                pass
+
+        if heartbeat_task and not heartbeat_task.done():
+            heartbeat_task.cancel()
+            try:
+                await heartbeat_task
+            except asyncio.CancelledError:
+                pass
+
         manager.disconnect(websocket)
 
 
