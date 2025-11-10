@@ -1,0 +1,53 @@
+# Triton Server with OmniAnomaly Model Support
+# Base: NVIDIA Triton Server with GPU support
+FROM nvcr.io/nvidia/tritonserver:24.08-py3
+
+# Set environment variables
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install system dependencies
+RUN apt-get update && \
+    apt-get install -y \
+    software-properties-common \
+    libcurl4 \
+    git \
+    curl \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Install PyTorch with CUDA support
+# Triton 24.08 uses CUDA 12.5, install compatible PyTorch
+RUN pip install --no-cache-dir \
+    torch==2.4.0 \
+    torchvision==0.19.0 \
+    --index-url https://download.pytorch.org/whl/cu121
+
+# Install additional dependencies for OmniAnomaly
+RUN pip install --no-cache-dir \
+    numpy==1.26.4 \
+    pandas==2.2.2 \
+    scikit-learn==1.5.1
+
+# Copy TranAD source code (contains OmniAnomaly model definition)
+WORKDIR /workspace
+COPY tranad-sim/src /workspace/tranad_src
+
+# Copy common model implementation
+COPY triton-omnianomaly/common /workspace/common
+
+# Model repository
+WORKDIR /models
+VOLUME ["/models"]
+
+# Healthcheck
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
+    CMD curl -f http://localhost:8000/v2/health/ready || exit 1
+
+# Triton server startup
+CMD ["tritonserver", \
+     "--model-repository=/models", \
+     "--strict-model-config=false", \
+     "--log-verbose=1", \
+     "--backend-config=python,shm-default-byte-size=33554432", \
+     "--model-control-mode=poll"]

@@ -1,0 +1,5 @@
+celery==5.4.0
+redis==5.2.0
+confluent-kafka==2.6.1
+tritonclient[http]==2.49.0
+numpy==1.26.4
