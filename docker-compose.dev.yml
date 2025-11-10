@@ -27,12 +27,17 @@ services:
   #   ports:
   #     - "5679:5679"
 
-  operation-server:
-    command: ["python", "-m", "debugpy", "--listen", "0.0.0.0:5682", "--wait-for-client", "-m", "uvicorn", "operation-server.main:app", "--host", "0.0.0.0", "--port", "8003"]
-    ports:
-      - "5682:5682"
+  # operation-server:
+  #   command: ["python", "-m", "debugpy", "--listen", "0.0.0.0:5682", "--wait-for-client", "-m", "uvicorn", "operation-server.main:app", "--host", "0.0.0.0", "--port", "8003"]
+  #   ports:
+  #     - "5682:5682"
 
   # batch-simulator:
   #   command: ["python", "-m", "debugpy", "--listen", "0.0.0.0:5678", "--wait-for-client", "simulator.py", "--kafka", "kafka:9092", "--num-batches", "999999"]
   #   ports:
   #     - "5678:5678"
+  
+  tranad:
+    command: ["python", "-m", "debugpy", "--listen", "0.0.0.0:5683", "--wait-for-client", "main.py", "--model", "OmniAnomaly", "--dataset", "SMAP", "--retrain"]
+    ports:
+      - "5683:5683"

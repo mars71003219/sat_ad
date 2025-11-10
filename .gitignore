@@ -1,4 +1,59 @@
-**/venv/
+# =================================================================
+# General
+# =================================================================
+.DS_Store
+*.log
+*.swo
+*.swp
+*.env
 
-# Frontend dependencies
-/frontend/node_modules
+# =================================================================
+# Python
+# =================================================================
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Distribution / packaging
+build/
+dist/
+downloads/
+eggs/
+.eggs/
+*.egg-info/
+*.egg
+
+# Environments
+.venv/
+env/
+venv/
+ENV/
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+
+# IDE / Editor
+.vscode/
+.idea/
+
+# =================================================================
+# Project Specific
+# =================================================================
+
+# Frontend
+/frontend/node_modules/
+/frontend/build/
+
+# tranad-sim
+/tranad-sim/data/
+/tranad-sim/processed/
+/tranad-sim/plots/
+/tranad-sim/checkpoints/

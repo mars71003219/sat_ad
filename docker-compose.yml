@@ -349,6 +349,30 @@ services:
       - telemetry-net
     restart: unless-stopped
 
+   # TranAD Service - 이상탐지 모델 및 데이터 개발용 
+  tranad:
+    build:
+      context: .
+      dockerfile: ./tranad-sim/Dockerfile
+    container_name: tranad
+    volumes:
+      - ./tranad-sim:/app/tranad-sim
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    depends_on:
+      - kafka
+    networks:
+      - telemetry-net
+    restart: unless-stopped
+    # Keep the container running for development
+    tty: true
+    command: tail -f /dev/null
+
 volumes:
   kafka_data:
   victoria_data:

@@ -80,6 +80,22 @@
                 }
             ],
             "justMyCode": true
+        },
+        {
+            "name": "Attach to TranAD Service",
+            "type": "python",
+            "request": "attach",
+            "connect": {
+                "host": "localhost",
+                "port": 5683
+            },
+            "pathMappings": [
+                {
+                    "localRoot": "${workspaceFolder}/tranad-sim",
+                    "remoteRoot": "/app/tranad-sim"
+                }
+            ],
+            "justMyCode": true
         }
     ]
 }
