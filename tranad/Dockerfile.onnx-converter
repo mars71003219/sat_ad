@@ -1,0 +1,18 @@
+# ONNX Converter for OmniAnomaly models
+# Lightweight PyTorch environment for checkpoint conversion
+
+FROM python:3.10-slim
+
+WORKDIR /workspace
+
+# Install PyTorch CPU and ONNX (for conversion only)
+RUN pip install --no-cache-dir torch==2.4.1 --index-url https://download.pytorch.org/whl/cpu
+RUN pip install --no-cache-dir onnx numpy
+
+# Copy source files
+COPY src /workspace/src
+COPY checkpoints /workspace/checkpoints
+COPY convert_to_onnx.py /workspace/
+
+# Run conversion
+CMD ["python", "convert_to_onnx.py"]

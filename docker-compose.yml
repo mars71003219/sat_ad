@@ -1,5 +1,8 @@
 services:
-  # Kafka - 메시지 버스
+  # ==========================================
+  # Core Infrastructure
+  # ==========================================
+
   kafka:
     image: confluentinc/cp-kafka:latest
     container_name: kafka
@@ -22,7 +25,7 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
-      # 데이터 보존 설정 (개발 환경)
+      # 데이터 보존 설정 (개발 환경) - from docker-compose.yml
       KAFKA_LOG_RETENTION_HOURS: 1  # 1시간만 보관
       KAFKA_LOG_RETENTION_BYTES: 104857600  # 100MB로 제한
       KAFKA_LOG_SEGMENT_BYTES: 10485760  # 10MB 세그먼트
@@ -37,8 +40,13 @@ services:
       fi;
       /etc/confluent/docker/run
       "
+    healthcheck: # Added healthcheck
+      test: ["CMD", "bash", "-c", "kafka-topics --bootstrap-server localhost:9092 --list || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 40s
 
-  # RabbitMQ - Celery 브로커
   rabbitmq:
     image: rabbitmq:3-management-alpine
     container_name: rabbitmq
@@ -56,8 +64,7 @@ services:
       timeout: 5s
       retries: 5
 
-  # Redis - 상태 저장 및 Pub/Sub
-  redis:
+  redis: # From docker-compose.yml
     image: redis:7-alpine
     container_name: redis
     ports:
@@ -72,7 +79,6 @@ services:
       retries: 5
     restart: unless-stopped
 
-  # VictoriaMetrics - 시계열 DB
   victoria-metrics:
     image: victoriametrics/victoria-metrics:latest
     container_name: victoria-metrics
@@ -80,7 +86,7 @@ services:
       - "8428:8428"
     volumes:
       - victoria_data:/victoria-metrics-data
-    command:
+    command: # From docker-compose.yml (more detailed)
       - '--storageDataPath=/victoria-metrics-data'
       - '--retentionPeriod=1d'  # 1일만 보관 (개발 환경, 최소값)
       - '--httpListenAddr=:8428'
@@ -91,334 +97,13 @@ services:
       - telemetry-net
     restart: unless-stopped
 
-  # Victoria Consumer - Kafka to VictoriaMetrics
-  victoria-consumer:
-    build:
-      context: .
-      dockerfile_inline: |
-        FROM python:3.10-slim
-        WORKDIR /app
-        COPY victoria-consumer/requirements.txt .
-        RUN pip install --no-cache-dir -r requirements.txt
-        COPY victoria-consumer/ ./victoria-consumer/
-        CMD ["python", "victoria-consumer/consumer.py"]
-    container_name: victoria-consumer
-    environment:
-      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
-      - VICTORIA_METRICS_URL=http://victoria-metrics:8428
-    depends_on:
-      - kafka
-      - victoria-metrics
-    networks:
-      - telemetry-net
-    restart: unless-stopped
-
-  # Batch Inference Trigger (Legacy - 배치 모드)
-  batch-inference-trigger:
-    build:
-      context: .
-      dockerfile_inline: |
-        FROM python:3.10-slim
-        WORKDIR /app
-        COPY shared/ ./shared/
-        COPY inference-trigger/requirements.txt ./inference-trigger/
-        RUN pip install --no-cache-dir -r inference-trigger/requirements.txt
-        COPY inference-trigger/ ./inference-trigger/
-        CMD ["python", "inference-trigger/trigger.py"]
-    container_name: batch-inference-trigger
-    environment:
-      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
-      - KAFKA_TOPIC_TELEMETRY=satellite-telemetry
-      - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672//
-      - CELERY_RESULT_BACKEND=rpc://
-      - WINDOW_SIZE=30
-      - STRIDE=10
-      - FORECAST_HORIZON=10
-    depends_on:
-      - kafka
-      - rabbitmq
-    networks:
-      - telemetry-net
-    profiles:
-      - batch
-    restart: unless-stopped
-
-  # Demultiplexer - Fan-out 서비스
-  demultiplexer:
-    build:
-      context: .
-      dockerfile_inline: |
-        FROM python:3.10-slim
-        WORKDIR /app
-        COPY demultiplexer/requirements.txt .
-        RUN pip install --no-cache-dir -r requirements.txt
-        COPY demultiplexer/ ./demultiplexer/
-        CMD ["python", "demultiplexer/demultiplexer.py"]
-    container_name: demultiplexer
-    environment:
-      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
-    depends_on:
-      - kafka
-    networks:
-      - telemetry-net
-    restart: unless-stopped
-
-  # EPS Trigger
-  eps-trigger:
-    build:
-      context: .
-      dockerfile_inline: |
-        FROM python:3.10-slim
-        WORKDIR /app
-        COPY shared/ ./shared/
-        COPY subsystem-triggers/requirements.txt .
-        RUN pip install --no-cache-dir -r requirements.txt
-        COPY subsystem-triggers/ .
-        CMD ["python", "eps_trigger.py"]
-    container_name: eps-trigger
-    environment:
-      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
-      - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672//
-      - CELERY_RESULT_BACKEND=rpc://
-      - WINDOW_SIZE=30
-      - STRIDE=10
-      - FORECAST_HORIZON=10
-    depends_on:
-      - kafka
-      - rabbitmq
-      - demultiplexer
-    networks:
-      - telemetry-net
-    restart: unless-stopped
-
-  # AOCS Trigger
-  aocs-trigger:
-    build:
-      context: .
-      dockerfile_inline: |
-        FROM python:3.10-slim
-        WORKDIR /app
-        COPY shared/ ./shared/
-        COPY subsystem-triggers/requirements.txt .
-        RUN pip install --no-cache-dir -r requirements.txt
-        COPY subsystem-triggers/ .
-        CMD ["python", "aocs_trigger.py"]
-    container_name: aocs-trigger
-    environment:
-      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
-      - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672//
-      - CELERY_RESULT_BACKEND=rpc://
-      - WINDOW_SIZE=30
-      - STRIDE=10
-      - FORECAST_HORIZON=10
-    depends_on:
-      - kafka
-      - rabbitmq
-      - demultiplexer
-    networks:
-      - telemetry-net
-    restart: unless-stopped
-
-  # FSW Trigger
-  fsw-trigger:
-    build:
-      context: .
-      dockerfile_inline: |
-        FROM python:3.10-slim
-        WORKDIR /app
-        COPY shared/ ./shared/
-        COPY subsystem-triggers/requirements.txt .
-        RUN pip install --no-cache-dir -r requirements.txt
-        COPY subsystem-triggers/ .
-        CMD ["python", "fsw_trigger.py"]
-    container_name: fsw-trigger
-    environment:
-      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
-      - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672//
-      - CELERY_RESULT_BACKEND=rpc://
-      - WINDOW_SIZE=30
-      - STRIDE=10
-      - FORECAST_HORIZON=10
-    depends_on:
-      - kafka
-      - rabbitmq
-      - demultiplexer
-    networks:
-      - telemetry-net
-    restart: unless-stopped
-
-  # Thermal Trigger
-  thermal-trigger:
-    build:
-      context: .
-      dockerfile_inline: |
-        FROM python:3.10-slim
-        WORKDIR /app
-        COPY shared/ ./shared/
-        COPY subsystem-triggers/requirements.txt .
-        RUN pip install --no-cache-dir -r requirements.txt
-        COPY subsystem-triggers/ .
-        CMD ["python", "thermal_trigger.py"]
-    container_name: thermal-trigger
-    environment:
-      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
-      - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672//
-      - CELERY_RESULT_BACKEND=rpc://
-      - WINDOW_SIZE=30
-      - STRIDE=10
-      - FORECAST_HORIZON=10
-    depends_on:
-      - kafka
-      - rabbitmq
-      - demultiplexer
-    networks:
-      - telemetry-net
-    restart: unless-stopped
-
-  # Data Trigger
-  data-trigger:
-    build:
-      context: .
-      dockerfile_inline: |
-        FROM python:3.10-slim
-        WORKDIR /app
-        COPY shared/ ./shared/
-        COPY subsystem-triggers/requirements.txt .
-        RUN pip install --no-cache-dir -r requirements.txt
-        COPY subsystem-triggers/ .
-        CMD ["python", "data_trigger.py"]
-    container_name: data-trigger
-    environment:
-      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
-      - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672//
-      - CELERY_RESULT_BACKEND=rpc://
-      - WINDOW_SIZE=30
-      - STRIDE=10
-      - FORECAST_HORIZON=10
-    depends_on:
-      - kafka
-      - rabbitmq
-      - demultiplexer
-    networks:
-      - telemetry-net
-    restart: unless-stopped
-
-  # Struct Trigger
-  struct-trigger:
-    build:
-      context: .
-      dockerfile_inline: |
-        FROM python:3.10-slim
-        WORKDIR /app
-        COPY shared/ ./shared/
-        COPY subsystem-triggers/requirements.txt .
-        RUN pip install --no-cache-dir -r requirements.txt
-        COPY subsystem-triggers/ .
-        CMD ["python", "struct_trigger.py"]
-    container_name: struct-trigger
-    environment:
-      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
-      - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672//
-      - CELERY_RESULT_BACKEND=rpc://
-      - WINDOW_SIZE=30
-      - STRIDE=10
-      - FORECAST_HORIZON=10
-    depends_on:
-      - kafka
-      - rabbitmq
-      - demultiplexer
-    networks:
-      - telemetry-net
-    restart: unless-stopped
-
-  # Propulsion Trigger
-  propulsion-trigger:
-    build:
-      context: .
-      dockerfile_inline: |
-        FROM python:3.10-slim
-        WORKDIR /app
-        COPY shared/ ./shared/
-        COPY subsystem-triggers/requirements.txt .
-        RUN pip install --no-cache-dir -r requirements.txt
-        COPY subsystem-triggers/ .
-        CMD ["python", "propulsion_trigger.py"]
-    container_name: propulsion-trigger
-    environment:
-      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
-      - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672//
-      - CELERY_RESULT_BACKEND=rpc://
-      - WINDOW_SIZE=30
-      - STRIDE=10
-      - FORECAST_HORIZON=10
-    depends_on:
-      - kafka
-      - rabbitmq
-      - demultiplexer
-    networks:
-      - telemetry-net
-    restart: unless-stopped
-
-  # Analysis Worker
-  analysis-worker:
-    build:
-      context: .
-      dockerfile_inline: |
-        FROM python:3.10-slim
-        WORKDIR /app
-        COPY analysis-worker/requirements.txt .
-        RUN pip install --no-cache-dir -r requirements.txt
-        COPY analysis-worker/ ./analysis-worker/
-        CMD ["python", "analysis-worker/tasks.py"]
-    container_name: analysis-worker
-    environment:
-      - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672//
-      - CELERY_RESULT_BACKEND=rpc://
-      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
-      - TRITON_SERVER_URL=triton-server:8000
-    depends_on:
-      - rabbitmq
-      - kafka
-      - triton-server
-    networks:
-      - telemetry-net
-    restart: unless-stopped
-
-  # Kafka UI
-  kafka-ui:
-    image: provectuslabs/kafka-ui:latest
-    container_name: kafka-ui
-    ports:
-      - "8080:8080"
-    environment:
-      - KAFKA_CLUSTERS_0_NAME=local
-      - KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS=kafka:9092
-    depends_on:
-      - kafka
-    networks:
-      - telemetry-net
-
-  # Flower - Celery 모니터링
-  flower:
-    image: mher/flower:latest
-    container_name: flower
-    command: celery --broker=amqp://guest:guest@rabbitmq:5672// flower --port=5555
-    ports:
-      - "5555:5555"
-    depends_on:
-      - rabbitmq
-    networks:
-      - telemetry-net
-
-  # PostgreSQL - 시스템 설정 저장소
-  postgres:
+  postgres: # From docker-compose.yml
     image: postgres:15-alpine
     container_name: postgres
     environment:
       POSTGRES_DB: telemetry_config
       POSTGRES_USER: admin
       POSTGRES_PASSWORD: admin123
-      # 개발 환경 최적화
       POSTGRES_MAX_CONNECTIONS: 50
       POSTGRES_SHARED_BUFFERS: 128MB
       POSTGRES_EFFECTIVE_CACHE_SIZE: 256MB
@@ -450,38 +135,256 @@ services:
       retries: 5
     restart: unless-stopped
 
-  # Triton Inference Server
+  # ==========================================
+  # Demultiplexer (범용, 서비스 무관) - from topic-centric
+  # ==========================================
+
+  stream-demux:
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM python:3.10-slim
+        WORKDIR /app
+        COPY stream-demux/requirements.txt .
+        RUN pip install --no-cache-dir -r requirements.txt
+        COPY stream-demux/ .
+        CMD ["python", "demux.py", "config.yaml"]
+    container_name: stream-demux
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+    depends_on:
+      kafka:
+        condition: service_healthy # Use healthy condition
+    networks:
+      - telemetry-net
+    restart: unless-stopped
+
+  # ==========================================
+  # Service 1: Anomaly Detection (이상탐지) - from topic-centric
+  # ==========================================
+
+  anomaly-detection:
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM python:3.10-slim
+        WORKDIR /app
+        COPY shared/ ./shared/
+        COPY services/anomaly-detection/requirements.txt .
+        RUN pip install --no-cache-dir -r requirements.txt
+        COPY services/anomaly-detection/ .
+        CMD ["python", "consumer.py"]
+    container_name: anomaly-detection
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672//
+      - CELERY_RESULT_BACKEND=rpc://
+      - WINDOW_SIZE=30
+      - STRIDE=10
+    depends_on:
+      kafka:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      stream-demux:
+        condition: service_started # stream-demux doesn't have healthcheck
+    networks:
+      - telemetry-net
+    restart: unless-stopped
+
+  # ==========================================
+  # Service 2: Scheduling (스케줄링) - 예시 - from topic-centric
+  # ==========================================
+
+  scheduling:
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM python:3.10-slim
+        WORKDIR /app
+        COPY services/scheduling/requirements.txt .
+        RUN pip install --no-cache-dir -r requirements.txt
+        COPY services/scheduling/ .
+        CMD ["python", "consumer.py"]
+    container_name: scheduling
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+    depends_on:
+      kafka:
+        condition: service_healthy
+      stream-demux:
+        condition: service_started # stream-demux doesn't have healthcheck
+    networks:
+      - telemetry-net
+    profiles:
+      - scheduling
+    restart: unless-stopped
+
+  # ==========================================
+  # Legacy Triggers (from docker-compose.yml)
+  # These might be redundant in a pure topic-centric model, but included as per request.
+  # ==========================================
+
+  batch-inference-trigger:
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM python:3.10-slim
+        WORKDIR /app
+        COPY shared/ ./shared/
+        COPY inference-trigger/requirements.txt ./inference-trigger/
+        RUN pip install --no-cache-dir -r inference-trigger/requirements.txt
+        COPY inference-trigger/ ./inference-trigger/
+        CMD ["python", "inference-trigger/trigger.py"]
+    container_name: batch-inference-trigger
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - KAFKA_TOPIC_TELEMETRY=satellite-telemetry
+      - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672//
+      - CELERY_RESULT_BACKEND=rpc://
+      - WINDOW_SIZE=30
+      - STRIDE=10
+      - FORECAST_HORIZON=10
+    depends_on:
+      kafka:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - telemetry-net
+    profiles:
+      - batch
+    restart: unless-stopped
+
+  # ==========================================
+  # Analysis Worker (Celery) - Merged
+  # ==========================================
+
+  analysis-worker:
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM python:3.10-slim
+        WORKDIR /app
+        COPY analysis-worker/requirements.txt .
+        RUN pip install --no-cache-dir -r requirements.txt
+        COPY analysis-worker/ ./analysis-worker/
+        COPY triton-repository/configs/satellite_model_mapping.json /app/satellite_model_mapping.json
+        CMD ["python", "analysis-worker/tasks.py"]
+    container_name: analysis-worker
+    environment:
+      - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672//
+      - CELERY_RESULT_BACKEND=rpc://
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - TRITON_SERVER_URL=triton-server:8000
+      - MODEL_MAPPING_PATH=/app/satellite_model_mapping.json # From topic-centric
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      triton-server:
+        condition: service_healthy # Assuming triton-server will have a healthcheck
+    networks:
+      - telemetry-net
+    restart: unless-stopped
+
+  # ==========================================
+  # Triton Inference Server (GPU) - From topic-centric (more complete)
+  # ==========================================
+
   triton-server:
     build:
       context: .
-      dockerfile: triton-models/Dockerfile.triton
-    image: triton-server-pytorch:latest
+      dockerfile: triton-repository/Dockerfile
     container_name: triton-server
     ports:
-      - "8000:8000"
-      - "8001:8001"
-      - "8002:8002"
+      - "8000:8000"  # HTTP
+      - "8001:8001"  # gRPC
+      - "8002:8002"  # Metrics
     volumes:
-      - ./triton-models:/models
-    command: >
-      tritonserver
-        --model-repository=/models
-        --strict-model-config=false
-        --log-verbose=1
-        --metrics-port=8002
-        --allow-grpc=true
-        --allow-http=true
+      - ./triton-repository/onnx:/models:ro
     networks:
       - telemetry-net
+    shm_size: '1gb'
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+    restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/v2/health/ready"]
-      interval: 10s
-      timeout: 5s
+      interval: 30s
+      timeout: 10s
       retries: 5
-      start_period: 30s
+      start_period: 60s
+
+  # ==========================================
+  # VictoriaMetrics Consumer - Updated depends_on
+  # ==========================================
+
+  victoria-consumer:
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM python:3.10-slim
+        WORKDIR /app
+        COPY victoria-consumer/requirements.txt .
+        RUN pip install --no-cache-dir -r requirements.txt
+        COPY victoria-consumer/ ./victoria-consumer/
+        CMD ["python", "victoria-consumer/consumer.py"]
+    container_name: victoria-consumer
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - VICTORIA_METRICS_URL=http://victoria-metrics:8428
+    depends_on:
+      kafka:
+        condition: service_healthy
+      victoria-metrics:
+        condition: service_started # victoria-metrics doesn't have healthcheck
+    networks:
+      - telemetry-net
     restart: unless-stopped
 
-  # Operation Server - FastAPI REST API
+  # ==========================================
+  # Monitoring
+  # ==========================================
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: kafka-ui
+    ports:
+      - "8080:8080"
+    environment:
+      - KAFKA_CLUSTERS_0_NAME=local
+      - KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS=kafka:9092
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks:
+      - telemetry-net
+
+  flower:
+    image: mher/flower:latest
+    container_name: flower
+    command: celery --broker=amqp://guest:guest@rabbitmq:5672// flower --port=5555
+    ports:
+      - "5555:5555"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - telemetry-net
+
+  # ==========================================
+  # Operation Server - FastAPI REST API - from docker-compose.yml
+  # ==========================================
+
   operation-server:
     build:
       context: .
@@ -504,7 +407,7 @@ services:
       - POSTGRES_USER=admin
       - POSTGRES_PASSWORD=admin123
       - VICTORIA_METRICS_URL=http://victoria-metrics:8428
-      - LOG_LEVEL=INFO  # DEBUG, INFO, WARNING, ERROR, CRITICAL
+      - LOG_LEVEL=INFO
     depends_on:
       postgres:
         condition: service_healthy
@@ -520,19 +423,26 @@ services:
       - telemetry-net
     restart: unless-stopped
 
-  # Frontend - React Dashboard
+  # ==========================================
+  # Frontend - React Dashboard - from docker-compose.yml
+  # ==========================================
+
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
     container_name: frontend
     depends_on:
-      - operation-server
+      operation-server:
+        condition: service_healthy
     networks:
       - telemetry-net
     restart: unless-stopped
 
-  # Nginx - Reverse Proxy
+  # ==========================================
+  # Nginx - Reverse Proxy - from docker-compose.yml
+  # ==========================================
+
   nginx:
     image: nginx:alpine
     container_name: nginx
@@ -542,14 +452,19 @@ services:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./nginx/conf.d:/etc/nginx/conf.d:ro
     depends_on:
-      - frontend
-      - operation-server
+      frontend:
+        condition: service_started # frontend doesn't have healthcheck
+      operation-server:
+        condition: service_healthy
     networks:
       - telemetry-net
     restart: unless-stopped
 
-  # Batch Simulator - 위성 텔레메트리 배치 데이터 생성
-  batch-simulator:
+  # ==========================================
+  # Simulators
+  # ==========================================
+
+  batch-simulator: # From docker-compose.yml
     build:
       context: .
       dockerfile_inline: |
@@ -558,16 +473,16 @@ services:
         COPY batch-simulator/requirements.txt .
         RUN pip install --no-cache-dir -r requirements.txt
         COPY batch-simulator/ .
-        CMD ["python", "simulator.py", "--kafka", "kafka:9092", "--num-batches", "999999"]
+        CMD ["python", "smap_simulator.py", "--kafka", "kafka:9092", "--satellites", "5", "--loops", "2", "--delay", "100"]
     environment:
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
     depends_on:
-      - kafka
+      kafka:
+        condition: service_healthy
     networks:
       - telemetry-net
     restart: unless-stopped
 
-  # SMAP Simulator - NASA SMAP 실측 데이터 기반 시뮬레이터
   smap-simulator:
     build:
       context: .
@@ -582,21 +497,25 @@ services:
     environment:
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
     depends_on:
-      - kafka
+      kafka:
+        condition: service_healthy
     networks:
       - telemetry-net
     profiles:
       - smap
     restart: unless-stopped
 
-   # TranAD Service - 이상탐지 모델 및 데이터 개발용 
+  # ==========================================
+  # TranAD Service - 이상탐지 모델 및 데이터 개발용 - from docker-compose.yml
+  # ==========================================
+
   tranad:
     build:
       context: .
-      dockerfile: ./tranad-sim/Dockerfile
+      dockerfile: ./tranad/Dockerfile
     container_name: tranad
     volumes:
-      - ./tranad-sim:/app/tranad-sim
+      - ./tranad:/app/tranad
     deploy:
       resources:
         reservations:
@@ -605,11 +524,11 @@ services:
               count: 1
               capabilities: [gpu]
     depends_on:
-      - kafka
+      kafka:
+        condition: service_healthy
     networks:
       - telemetry-net
     restart: unless-stopped
-    # Keep the container running for development
     tty: true
     command: tail -f /dev/null
 

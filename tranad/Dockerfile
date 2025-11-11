@@ -28,7 +28,7 @@ RUN python3.8 -m pip install --upgrade pip
 RUN ln -s /usr/bin/python3.8 /usr/bin/python
 
 # Set workdir
-WORKDIR /app/tranad-sim
+WORKDIR /app/tranad
 
 # --- 최종 설치 순서 ---
 
@@ -39,7 +39,7 @@ RUN python3.8 -m pip install torch==1.12.1+cu113 torchvision==0.13.1+cu113 torch
 RUN python3.8 -m pip install dgl-cu113 -f https://data.dgl.ai/wheels/repo.html
 
 # 3. requirements.txt 복사 및 설치 (dgl이 제거된 버전)
-COPY ./tranad-sim/requirements.txt .
+COPY tranad/requirements.txt .
 RUN python3.8 -m pip install -r requirements.txt
 
 # 4. 기타 빠진 의존성 설치

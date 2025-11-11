@@ -1,0 +1,56 @@
+{
+  "description": "위성별 서브시스템 모델 매핑 - ONNX Backend",
+  "backend": "onnxruntime",
+  "mapping": {
+    "sat1": {
+      "EPS": "SMAP_E-1",
+      "ACS": "SMAP_A-1",
+      "FSW": "SMAP_F-1",
+      "TCS": "SMAP_T-1",
+      "Data": "SMAP_D-1",
+      "SS": "SMAP_S-1",
+      "PS": "SMAP_P-1"
+    },
+    "sat2": {
+      "EPS": "SMAP_E-2",
+      "ACS": "SMAP_A-2",
+      "FSW": "SMAP_F-2",
+      "TCS": "SMAP_T-2",
+      "Data": "SMAP_D-2",
+      "SS": "SMAP_S-1",
+      "PS": "SMAP_P-2"
+    },
+    "sat3": {
+      "EPS": "SMAP_E-3",
+      "ACS": "SMAP_A-3",
+      "FSW": "SMAP_F-3",
+      "TCS": "SMAP_T-3",
+      "Data": "SMAP_D-3",
+      "SS": "SMAP_S-1",
+      "PS": "SMAP_P-3"
+    },
+    "sat4": {
+      "EPS": "SMAP_E-4",
+      "ACS": "SMAP_A-4",
+      "FSW": "SMAP_F-1",
+      "TCS": "SMAP_T-1",
+      "Data": "SMAP_D-4",
+      "SS": "SMAP_S-1",
+      "PS": "SMAP_P-4"
+    },
+    "sat5": {
+      "EPS": "SMAP_E-5",
+      "ACS": "SMAP_A-5",
+      "FSW": "SMAP_F-2",
+      "TCS": "SMAP_T-2",
+      "Data": "SMAP_D-5",
+      "SS": "SMAP_S-1",
+      "PS": "SMAP_P-7"
+    }
+  },
+  "notes": [
+    "ONNX Runtime GPU 백엔드 사용",
+    "각 위성의 서브시스템은 서로 다른 SMAP 모델을 사용",
+    "총 22개 고유 모델 (중복 제거 후)"
+  ]
+}

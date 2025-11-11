@@ -162,7 +162,8 @@ class AnomalyDetectionConsumer:
                     'window_end_time': window_records[-1]['timestamp'],
                     'service': 'anomaly-detection'
                 },
-                task_id=task_id
+                task_id=task_id,
+                queue='inference'
             )
 
             self.stats['inferences'] += 1

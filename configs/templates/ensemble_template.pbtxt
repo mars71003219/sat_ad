@@ -1,0 +1,100 @@
+# Ensemble Backend Configuration Template
+# 여러 모델을 파이프라인으로 연결
+
+name: "ensemble_pipeline"
+platform: "ensemble"  # backend가 아닌 platform 사용
+max_batch_size: 0
+
+# 최종 입력 (외부 클라이언트가 제공)
+input [
+  {
+    name: "raw_input"
+    data_type: TYPE_FP32
+    dims: [ -1, 25 ]
+  }
+]
+
+# 최종 출력 (외부 클라이언트에게 반환)
+output [
+  {
+    name: "final_result"
+    data_type: TYPE_FP32
+    dims: [ -1, 1 ]
+  }
+]
+
+# 앙상블 스케줄링 (추론 그래프 정의)
+ensemble_scheduling {
+  # Step 1: 전처리
+  step [
+    {
+      model_name: "preprocessing"
+      model_version: -1  # -1 = 최신 버전 자동 선택
+      input_map {
+        key: "input_data"
+        value: "raw_input"  # 외부 입력과 매핑
+      }
+      output_map {
+        key: "normalized"
+        value: "preprocessed_data"  # 내부 텐서 이름
+      }
+    }
+  ]
+
+  # Step 2: ONNX 모델 추론
+  step [
+    {
+      model_name: "SMAP_E-1"
+      model_version: -1
+      input_map {
+        key: "input_data"
+        value: "preprocessed_data"
+      }
+      output_map {
+        key: "anomaly_score"
+        value: "onnx_score"
+      }
+    }
+  ]
+
+  # Step 3: PyTorch 모델 추론 (병렬 실행)
+  step [
+    {
+      model_name: "tranad_sat1"
+      model_version: -1
+      input_map {
+        key: "INPUT__0"
+        value: "preprocessed_data"
+      }
+      output_map {
+        key: "OUTPUT__0"
+        value: "pytorch_score"
+      }
+    }
+  ]
+
+  # Step 4: 후처리 (결과 조합)
+  step [
+    {
+      model_name: "postprocessing"
+      model_version: -1
+      input_map {
+        key: "score1"
+        value: "onnx_score"
+      }
+      input_map {
+        key: "score2"
+        value: "pytorch_score"
+      }
+      output_map {
+        key: "combined_result"
+        value: "final_result"  # 외부 출력과 매핑
+      }
+    }
+  ]
+}
+
+# Ensemble는 버전 디렉토리(1/)가 빈 폴더여야 함
+version_policy {
+  latest { num_versions: 1 }
+}

@@ -1,270 +1,369 @@
-# 위성 텔레메트리 이상 감지 시스템
+# Triton Inference Server - 통합 모델 리포지토리
 
-이벤트 기반 배치 처리 아키텍처를 사용하는 위성 텔레메트리 이상 감지 시스템입니다.
-
-## 시스템 개요
-
-이 시스템은 복수의 위성에서 배치 형태로 전송되는 텔레메트리 데이터를 실시간으로 수집하고, 배치 전송이 완료되면 자동으로 추론을 트리거하여 이상을 감지합니다.
-
-### 주요 특징
-
-- 이벤트 기반 배치 처리 (폴링 방식 없음)
-- 9시간 배치 데이터 (1,080개 레코드)
-- 슬라이딩 윈도우 추론 (윈도우 크기: 30, 스트라이드: 10)
-- 4개 서브시스템 지원 (EPS, Thermal, AOCS, Comm)
-- 분산 추론 처리 (Celery)
-- 실시간 대시보드
-
-## 아키텍처
-
-### 데이터 흐름
-
-```
-위성 → Kafka → VictoriaMetrics
-         ↓
-   Batch Trigger → Celery → Analysis Worker → Kafka
-                                                ↓
-                                         VictoriaMetrics
-                                                ↓
-                                         Dashboard
-```
-
-### 서비스 구성
-
-1. **Kafka**: 메시지 버스 (텔레메트리 데이터, 추론 결과)
-2. **RabbitMQ**: Celery 브로커 (추론 작업 큐)
-3. **VictoriaMetrics**: 시계열 데이터베이스
-4. **PostgreSQL**: 시스템 설정 저장소
-5. **Triton Server**: AI 추론 서버 (Mock)
-6. **Batch Simulator**: 위성 데이터 시뮬레이터
-7. **Victoria Consumer**: Kafka → VictoriaMetrics 데이터 파이프라인
-8. **Batch Inference Trigger**: 배치 완료 감지 및 추론 트리거
-9. **Analysis Worker**: 분산 추론 작업자
-10. **Operation Server**: REST API 서버
-11. **Frontend**: React 대시보드
-12. **Nginx**: 리버스 프록시
-
-## 배치 처리 메커니즘
-
-### 배치 데이터 구조
-
-각 텔레메트리 메시지는 다음 메타데이터를 포함합니다:
-
-- `batch_id`: 배치 고유 식별자
-- `record_index`: 배치 내 레코드 순번
-- `is_last_record`: 배치 마지막 레코드 여부
-
-### 배치 완료 감지
-
-Batch Inference Trigger는 Kafka에서 텔레메트리 메시지를 실시간으로 컨슘하며, `is_last_record=true`를 감지하면 배치 전송이 완료된 것으로 판단합니다.
-
-### 슬라이딩 윈도우 추론
-
-배치 완료 후 다음 파라미터로 슬라이딩 윈도우를 생성합니다:
-
-- **배치 크기**: 1,080개 레코드 (9시간 × 120 레코드/시간)
-- **윈도우 크기**: 30개 레코드 (15분)
-- **스트라이드**: 10개 레코드 (5분)
-- **윈도우 개수**: (1,080 - 30) / 10 + 1 = 106개
-- **추론 작업 수**: 106 × 4 서브시스템 = 424개
-
-## 빠른 시작
-
-### 사전 요구사항
-
-- Docker 및 Docker Compose
-- 최소 8GB RAM
-- 10GB 디스크 공간
-
-### 설치 및 실행
-
-1. 프로젝트 클론
-
-```bash
-cd /mnt/c/projects/telemetry_anomaly_det
-```
-
-2. Kafka 클러스터 ID 생성
-
-```bash
-bash init-kafka.sh
-```
-
-3. 전체 시스템 실행
-
-```bash
-docker-compose up -d
-```
-
-4. 시뮬레이터 실행 (별도 터미널)
-
-```bash
-docker-compose run --rm batch-simulator
-```
-
-### 서비스 접속
-
-- **Dashboard**: http://localhost
-- **Operation Server API**: http://localhost/api
-- **Kafka UI**: http://localhost:8080
-- **RabbitMQ Management**: http://localhost:15672 (guest/guest)
-- **Flower (Celery)**: http://localhost:5555
-- **VictoriaMetrics**: http://localhost:8428
-
-## API 엔드포인트
-
-### Dashboard API
-
-- `GET /api/dashboard/stats`: 전체 통계
-- `GET /api/dashboard/anomalies?hours=24`: 최근 이상 감지 결과
-
-### Configuration API
-
-- `GET /api/config/system`: 시스템 설정
-- `GET /api/config/models`: 모델 설정
-- `GET /api/config/satellites`: 위성 설정
-
-### Inference API
-
-- `GET /api/inference/recent?limit=100`: 최근 추론 결과
-- `GET /api/inference/statistics`: 추론 통계
+위성 텔레메트리 이상 감지 시스템을 위한 Triton 모델 저장소입니다.
+모든 백엔드(ONNX, TensorRT, PyTorch, Python, Ensemble)를 체계적으로 관리합니다.
 
 ## 디렉토리 구조
 
 ```
-telemetry_anomaly_det/
-├── batch-simulator/         # 위성 데이터 시뮬레이터
-├── inference-trigger/        # 배치 추론 트리거
-├── analysis-worker/          # 추론 작업자
-├── victoria-consumer/        # Kafka → VictoriaMetrics
-├── operation-server/         # REST API 서버
-├── frontend/                 # React 대시보드
-├── nginx/                    # Nginx 설정
-├── database/                 # PostgreSQL 스키마
-├── triton-models/            # Triton 모델 리포지토리
-├── shared/                   # 공유 코드
-├── docker-compose.yml        # Docker Compose 설정
-└── init-kafka.sh             # Kafka 초기화 스크립트
+triton-repository/
+├── onnx/                    # ONNX Runtime 백엔드
+│   ├── SMAP_A-1/
+│   │   ├── 1/
+│   │   │   └── model.onnx
+│   │   └── config.pbtxt
+│   └── ...                  (27개 모델)
+│
+├── tensorrt/                # TensorRT 백엔드 (고성능 GPU 추론)
+│   ├── SMAP_A-1_trt/
+│   │   ├── 1/
+│   │   │   └── model.plan
+│   │   └── config.pbtxt
+│   └── ...
+│
+├── pytorch/                 # PyTorch/TorchScript 백엔드
+│   ├── tranad_sat1/
+│   │   ├── 1/
+│   │   │   └── model.pt
+│   │   └── config.pbtxt
+│   └── ...
+│
+├── python/                  # Python 커스텀 백엔드
+│   ├── preprocessing/
+│   │   ├── 1/
+│   │   │   └── model.py
+│   │   └── config.pbtxt
+│   ├── postprocessing/
+│   └── custom_logic/
+│
+├── ensemble/                # 앙상블 모델 (여러 백엔드 조합)
+│   ├── multi_detector/
+│   │   ├── 1/              # 버전 디렉토리 (빈 폴더)
+│   │   └── config.pbtxt     # 앙상블 설정
+│   └── ...
+│
+├── configs/                 # 공통 설정 파일
+│   ├── common.pbtxt         # 공통 파라미터
+│   └── templates/           # 백엔드별 config 템플릿
+│
+└── scripts/                 # 유틸리티 스크립트
+    ├── deploy_onnx.py       # ONNX 모델 배포
+    ├── convert_tensorrt.py  # ONNX → TensorRT 변환
+    └── validate_models.sh   # 모델 검증
+```
+
+## 백엔드별 설명
+
+### 1. ONNX Backend (onnx/)
+**현재 사용 중**
+
+- **용도**: 프레임워크 독립적 추론
+- **장점**: 이식성, 범용성
+- **모델**: OmniAnomaly (27개)
+- **입력**: FP32, shape [-1, 25]
+- **출력**: reconstruction, anomaly_score, anomaly_detected
+
+**예시 구조:**
+```
+onnx/SMAP_E-1/
+├── 1/
+│   └── model.onnx          # ONNX 모델 파일
+└── config.pbtxt            # Triton 설정
+```
+
+### 2. TensorRT Backend (tensorrt/)
+**향후 확장**
+
+- **용도**: NVIDIA GPU 최적화 추론 (ONNX보다 2-5배 빠름)
+- **장점**: 최고 성능, FP16/INT8 양자화 지원
+- **변환**: ONNX → TensorRT .plan 파일
+- **GPU**: RTX 5060 (sm_89)
+
+**생성 방법:**
+```bash
+python scripts/convert_tensorrt.py \
+  --onnx onnx/SMAP_E-1/1/model.onnx \
+  --output tensorrt/SMAP_E-1_trt/1/model.plan \
+  --fp16  # FP16 정밀도
+```
+
+### 3. PyTorch Backend (pytorch/)
+**향후 확장**
+
+- **용도**: TorchScript 모델 직접 서빙
+- **장점**: PyTorch 네이티브 기능 사용 가능
+- **모델 예시**: TranAD 원본 체크포인트 변환
+
+**변환 방법:**
+```python
+import torch
+
+model = TranAD(feats=25)
+model.load_state_dict(torch.load('checkpoint.pt'))
+model.eval()
+
+traced = torch.jit.trace(model, example_input)
+traced.save('model.pt')
+```
+
+### 4. Python Backend (python/)
+**향후 확장**
+
+- **용도**: 커스텀 Python 로직 실행
+- **사용 사례**:
+  - 전처리: 데이터 정규화, 특징 추출
+  - 후처리: 임계값 적용, 결과 필터링
+  - 비즈니스 로직: DB 조회, 캐싱
+  - 외부 API 호출
+
+**예시 (전처리):**
+```python
+# python/preprocessing/1/model.py
+import triton_python_backend_utils as pb_utils
+import numpy as np
+
+class TritonPythonModel:
+    def execute(self, requests):
+        responses = []
+        for request in requests:
+            # 원본 특징 추출
+            raw_data = pb_utils.get_input_tensor_by_name(request, "raw_data")
+            data = raw_data.as_numpy()
+
+            # 정규화
+            normalized = (data - self.mean) / self.std
+
+            # 다음 모델로 전달
+            out_tensor = pb_utils.Tensor("normalized_data", normalized)
+            responses.append(pb_utils.InferenceResponse([out_tensor]))
+        return responses
+```
+
+### 5. Ensemble Backend (ensemble/)
+**향후 확장**
+
+- **용도**: 여러 모델을 파이프라인으로 연결
+- **특징**: 추론 그래프 정의 (DAG)
+- **사용 사례**: 전처리 → 추론 → 후처리 파이프라인
+
+**예시 (다중 모델 앙상블):**
+```
+ensemble/anomaly_pipeline/
+├── 1/                      # 빈 폴더
+└── config.pbtxt
+
+config.pbtxt 내용:
+platform: "ensemble"
+ensemble_scheduling {
+  step [
+    {
+      model_name: "preprocessing"
+      model_version: 1
+      input_map { key: "raw_input" value: "raw_input" }
+      output_map { key: "normalized" value: "preprocessed_data" }
+    },
+    {
+      model_name: "SMAP_E-1"
+      model_version: 1
+      input_map { key: "input_data" value: "preprocessed_data" }
+      output_map { key: "anomaly_score" value: "onnx_score" }
+    },
+    {
+      model_name: "tranad_sat1"
+      model_version: 1
+      input_map { key: "input_data" value: "preprocessed_data" }
+      output_map { key: "anomaly_score" value: "pytorch_score" }
+    },
+    {
+      model_name: "postprocessing"
+      model_version: 1
+      input_map { key: "score1" value: "onnx_score" }
+      input_map { key: "score2" value: "pytorch_score" }
+      output_map { key: "final_result" value: "final_result" }
+    }
+  ]
+}
+```
+
+## 모델 배포 가이드
+
+### ONNX 모델 추가
+
+```bash
+# 1. 모델 디렉토리 생성
+mkdir -p triton-repository/onnx/NEW_MODEL/1
+
+# 2. ONNX 파일 복사
+cp model.onnx triton-repository/onnx/NEW_MODEL/1/
+
+# 3. config.pbtxt 생성
+cat > triton-repository/onnx/NEW_MODEL/config.pbtxt << EOF
+name: "NEW_MODEL"
+backend: "onnxruntime"
+max_batch_size: 0
+
+input [
+  {
+    name: "input_data"
+    data_type: TYPE_FP32
+    dims: [ -1, 25 ]
+  }
+]
+
+output [
+  {
+    name: "output"
+    data_type: TYPE_FP32
+    dims: [ -1, 25 ]
+  }
+]
+
+instance_group [
+  {
+    count: 1
+    kind: KIND_GPU
+    gpus: [ 0 ]
+  }
+]
+EOF
+
+# 4. Triton 재시작 (자동 로드)
+docker compose restart triton-server
+```
+
+### TensorRT 변환 및 배포
+
+```bash
+# 1. ONNX → TensorRT 변환
+python scripts/convert_tensorrt.py \
+  --onnx onnx/SMAP_E-1/1/model.onnx \
+  --output tensorrt/SMAP_E-1_trt/1/model.plan \
+  --fp16 \
+  --workspace 4096
+
+# 2. config.pbtxt 생성 (backend: "tensorrt")
+# 3. Triton 재시작
+```
+
+### PyTorch 모델 배포
+
+```bash
+# 1. TorchScript 변환
+python scripts/convert_torchscript.py \
+  --checkpoint tranad/checkpoints/sat1.ckpt \
+  --output pytorch/tranad_sat1/1/model.pt
+
+# 2. config.pbtxt 생성 (backend: "pytorch")
+# 3. Triton 재시작
+```
+
+## 모델 버전 관리
+
+Triton은 각 모델의 여러 버전을 동시에 서빙할 수 있습니다:
+
+```
+onnx/SMAP_E-1/
+├── 1/
+│   └── model.onnx          # 버전 1 (구버전)
+├── 2/
+│   └── model.onnx          # 버전 2 (신버전)
+└── config.pbtxt
+
+config.pbtxt:
+version_policy {
+  latest { num_versions: 2 }  # 최신 2개 버전 동시 서빙
+}
+```
+
+클라이언트는 특정 버전 요청 가능:
+```python
+response = triton_client.infer(
+    model_name="SMAP_E-1",
+    model_version="2",  # 버전 지정
+    inputs=inputs
+)
+```
+
+## 성능 최적화
+
+### 1. Dynamic Batching
+여러 요청을 배치로 묶어 처리:
+
+```
+dynamic_batching {
+  max_queue_delay_microseconds: 100
+  preferred_batch_size: [ 4, 8 ]
+}
+```
+
+### 2. Instance Group
+모델 인스턴스 복제로 처리량 증가:
+
+```
+instance_group [
+  {
+    count: 4          # 4개 인스턴스
+    kind: KIND_GPU
+    gpus: [ 0 ]
+  }
+]
+```
+
+### 3. TensorRT FP16
+정밀도를 FP16으로 낮춰 2배 속도 향상:
+
+```bash
+trtexec --onnx=model.onnx --fp16 --saveEngine=model.plan
 ```
 
 ## 모니터링
 
-### Kafka 메시지 확인
-
-Kafka UI (http://localhost:8080)에서 다음 토픽을 모니터링할 수 있습니다:
-
-- `satellite-telemetry`: 위성 텔레메트리 데이터
-- `inference-results`: 추론 결과
-
-### Celery 작업 모니터링
-
-Flower (http://localhost:5555)에서 추론 작업 상태를 실시간으로 확인할 수 있습니다.
-
-### VictoriaMetrics 쿼리
-
-VictoriaMetrics (http://localhost:8428)에서 PromQL 쿼리를 실행할 수 있습니다:
-
-```promql
-# 위성별 텔레메트리 데이터
-satellite_telemetry{satellite_id="SAT-001"}
-
-# 이상 감지 결과
-inference_anomaly_score{subsystem="eps"}
-```
-
-## 개발
-
-### 로컬 개발 환경
-
-각 서비스는 독립적으로 개발할 수 있습니다:
-
+### 모델 상태 확인
 ```bash
-# Operation Server
-cd operation-server
-pip install -r requirements.txt
-uvicorn main:app --reload
-
-# Frontend
-cd frontend
-npm install
-npm start
+curl http://localhost:8000/v2/models
+curl http://localhost:8000/v2/models/SMAP_E-1
 ```
 
-### 로그 확인
-
+### 통계 조회
 ```bash
-# 전체 서비스 로그
-docker-compose logs -f
-
-# 특정 서비스 로그
-docker-compose logs -f batch-inference-trigger
-docker-compose logs -f analysis-worker
+curl http://localhost:8000/v2/models/SMAP_E-1/stats
 ```
 
-## 설정
-
-### 배치 파라미터 조정
-
-`docker-compose.yml`에서 환경 변수를 수정하여 배치 파라미터를 조정할 수 있습니다:
-
-```yaml
-environment:
-  - WINDOW_SIZE=30        # 윈도우 크기 (레코드 수)
-  - STRIDE=10             # 스트라이드 (레코드 수)
-  - FORECAST_HORIZON=10   # 예측 범위 (레코드 수)
-```
-
-### PostgreSQL 설정
-
-`database/init.sql`에서 초기 시스템 설정을 수정할 수 있습니다.
-
-## 서브시스템 상세
-
-### EPS (전력 시스템)
-
-12개 특징: 전압, 전류, 배터리 상태 등
-
-### Thermal (온도 시스템)
-
-6개 특징: 각종 센서 온도
-
-### AOCS (자세제어 시스템)
-
-12개 특징: 자이로스코프, 가속도계, 자기장 센서 등
-
-### Comm (통신 시스템)
-
-3개 특징: 신호 강도, 데이터 전송률 등
-
-## 문제 해결
-
-### Kafka 초기화 오류
-
-Kafka 클러스터 ID가 없으면 초기화에 실패합니다. 다음 명령으로 재생성하세요:
-
+### 헬스체크
 ```bash
-rm .env
-bash init-kafka.sh
-docker-compose up -d kafka
+curl http://localhost:8000/v2/health/ready
+curl http://localhost:8000/v2/health/live
 ```
 
-### PostgreSQL 연결 오류
+## 현재 배포 상태
 
-PostgreSQL이 완전히 시작되지 않은 상태에서 다른 서비스가 시작되면 연결 오류가 발생할 수 있습니다:
+### ONNX Models (27개)
+- **EPS (전력)**: SMAP_E-1, E-2, E-3, E-4, E-5
+- **ACS (자세제어)**: SMAP_A-1, A-2, A-3, A-4, A-5
+- **FSW (비행 SW)**: SMAP_F-1, F-2, F-3
+- **TCS (열제어)**: SMAP_T-1, T-2, T-3
+- **Data (데이터)**: SMAP_D-1, D-2, D-3, D-4, D-5
+- **SS (구조)**: SMAP_S-1
+- **PS (추진)**: SMAP_P-1, P-2, P-3, P-4, P-7
 
-```bash
-docker-compose restart operation-server
-```
+### 추론 성능
+- **GPU**: RTX 5060 (8GB VRAM)
+- **평균 추론 시간**: 40-50ms per window
+- **처리량**: ~20-25 inferences/sec
+- **메모리 사용**: 4.8GB / 8.1GB
 
-### 추론 작업이 실행되지 않음
+## 향후 로드맵
 
-RabbitMQ와 Analysis Worker 상태를 확인하세요:
+1. **Phase 1 (현재)**: ONNX Runtime 백엔드
+2. **Phase 2**: TensorRT 변환으로 성능 2-5배 향상
+3. **Phase 3**: PyTorch 백엔드 추가 (TranAD 원본)
+4. **Phase 4**: Python 전처리/후처리 파이프라인
+5. **Phase 5**: Ensemble 모델로 다중 알고리즘 앙상블
 
-```bash
-docker-compose logs rabbitmq
-docker-compose logs analysis-worker
-```
+## 참고 자료
 
-## 라이선스
-
-MIT License
+- [Triton 공식 문서](https://docs.nvidia.com/deeplearning/triton-inference-server/)
+- [ONNX Runtime](https://onnxruntime.ai/)
+- [TensorRT](https://developer.nvidia.com/tensorrt)
+- [PyTorch Backend](https://github.com/triton-inference-server/pytorch_backend)
+- [Python Backend](https://github.com/triton-inference-server/python_backend)

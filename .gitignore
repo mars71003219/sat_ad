@@ -59,3 +59,14 @@ coverage.xml
 /tranad/checkpoints/
 
 *.ckpt
+
+# Triton 모델 파일 (용량이 크므로 Git 제외)
+onnx/*/1/*.onnx
+tensorrt/*/1/*.plan
+pytorch/*/1/*.pt
+python/*/1/__pycache__/
+
+# 임시 파일
+*.pyc
+__pycache__/
+.DS_Store

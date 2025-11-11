@@ -1,0 +1,64 @@
+# ONNX Runtime Backend Configuration Template
+# 이 템플릿을 복사하여 각 ONNX 모델의 config.pbtxt 생성
+
+name: "MODEL_NAME"
+backend: "onnxruntime"
+max_batch_size: 0  # 0 = 동적 배치 비활성화 (config에서 shape 관리)
+
+# 입력 텐서 정의
+input [
+  {
+    name: "input_data"
+    data_type: TYPE_FP32
+    dims: [ -1, 25 ]  # [-1: 동적 배치 크기, 25: 특징 개수]
+  }
+]
+
+# 출력 텐서 정의
+output [
+  {
+    name: "reconstruction"
+    data_type: TYPE_FP32
+    dims: [ -1, 25 ]
+  },
+  {
+    name: "anomaly_score"
+    data_type: TYPE_FP32
+    dims: [ -1, 1 ]
+  },
+  {
+    name: "anomaly_detected"
+    data_type: TYPE_FP32
+    dims: [ -1, 1 ]
+  }
+]
+
+# 최적화 설정
+optimization {
+  graph {
+    level: 1  # 0=off, 1=basic, 2=extended
+  }
+  cuda {
+    graphs: false  # CUDA Graph 최적화 (실험적)
+  }
+}
+
+# 인스턴스 그룹 (GPU 사용)
+instance_group [
+  {
+    count: 1           # 동시 인스턴스 수
+    kind: KIND_GPU
+    gpus: [ 0 ]        # GPU ID
+  }
+]
+
+# 동적 배칭 (선택 사항)
+# dynamic_batching {
+#   max_queue_delay_microseconds: 100
+#   preferred_batch_size: [ 4, 8 ]
+# }
+
+# 버전 정책
+version_policy {
+  latest { num_versions: 1 }  # 최신 버전만 로드
+}

@@ -1,0 +1,47 @@
+name: "SMAP_A-5"
+backend: "onnxruntime"
+max_batch_size: 0
+
+input [
+  {
+    name: "input_data"
+    data_type: TYPE_FP32
+    dims: [ -1, 25 ]
+  }
+]
+
+output [
+  {
+    name: "reconstruction"
+    data_type: TYPE_FP32
+    dims: [ -1, 25 ]
+  },
+  {
+    name: "anomaly_score"
+    data_type: TYPE_FP32
+    dims: [ -1, 1 ]
+  },
+  {
+    name: "anomaly_detected"
+    data_type: TYPE_FP32
+    dims: [ -1, 1 ]
+  }
+]
+
+optimization {
+  graph: {
+    level: 1
+  }
+}
+
+instance_group [
+  {
+    count: 1
+    kind: KIND_GPU
+    gpus: [ 0 ]
+  }
+]
+
+dynamic_batching {
+  max_queue_delay_microseconds: 100
+}

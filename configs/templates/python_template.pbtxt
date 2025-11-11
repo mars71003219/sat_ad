@@ -1,0 +1,38 @@
+# Python Backend Configuration Template
+# 커스텀 Python 로직 실행용
+
+name: "python_model"
+backend: "python"
+max_batch_size: 0
+
+# 입력 텐서 (커스텀 정의 가능)
+input [
+  {
+    name: "input_data"
+    data_type: TYPE_FP32
+    dims: [ -1, 25 ]
+  }
+]
+
+# 출력 텐서 (커스텀 정의 가능)
+output [
+  {
+    name: "output_data"
+    data_type: TYPE_FP32
+    dims: [ -1, 25 ]
+  }
+]
+
+# Python Backend는 CPU/GPU 선택 가능
+instance_group [
+  {
+    count: 1
+    kind: KIND_CPU  # 또는 KIND_GPU
+  }
+]
+
+version_policy {
+  latest { num_versions: 1 }
+}
+
+# Python 모델은 1/model.py 파일에 TritonPythonModel 클래스 구현 필요

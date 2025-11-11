@@ -152,11 +152,12 @@ def run_inference(
         reconstructions = []
 
         for features in window_features:
-            input_array = np.array(features, dtype=np.float64)  # [25,]
+            input_array = np.array(features, dtype=np.float32)  # [25,]
+            input_array = np.expand_dims(input_array, axis=0)  # [1, 25] - 배치 차원 추가
 
             # Triton 입력 생성
             inputs = [
-                httpclient.InferInput("input_data", input_array.shape, "FP64")
+                httpclient.InferInput("input_data", input_array.shape, "FP32")
             ]
             inputs[0].set_data_from_numpy(input_array)
 
