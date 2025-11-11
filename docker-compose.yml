@@ -113,7 +113,7 @@ services:
       - telemetry-net
     restart: unless-stopped
 
-  # Batch Inference Trigger
+  # Batch Inference Trigger (Legacy - 배치 모드)
   batch-inference-trigger:
     build:
       context: .
@@ -137,6 +137,224 @@ services:
     depends_on:
       - kafka
       - rabbitmq
+    networks:
+      - telemetry-net
+    profiles:
+      - batch
+    restart: unless-stopped
+
+  # Demultiplexer - Fan-out 서비스
+  demultiplexer:
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM python:3.10-slim
+        WORKDIR /app
+        COPY demultiplexer/requirements.txt .
+        RUN pip install --no-cache-dir -r requirements.txt
+        COPY demultiplexer/ ./demultiplexer/
+        CMD ["python", "demultiplexer/demultiplexer.py"]
+    container_name: demultiplexer
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+    depends_on:
+      - kafka
+    networks:
+      - telemetry-net
+    restart: unless-stopped
+
+  # EPS Trigger
+  eps-trigger:
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM python:3.10-slim
+        WORKDIR /app
+        COPY shared/ ./shared/
+        COPY subsystem-triggers/requirements.txt .
+        RUN pip install --no-cache-dir -r requirements.txt
+        COPY subsystem-triggers/ .
+        CMD ["python", "eps_trigger.py"]
+    container_name: eps-trigger
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672//
+      - CELERY_RESULT_BACKEND=rpc://
+      - WINDOW_SIZE=30
+      - STRIDE=10
+      - FORECAST_HORIZON=10
+    depends_on:
+      - kafka
+      - rabbitmq
+      - demultiplexer
+    networks:
+      - telemetry-net
+    restart: unless-stopped
+
+  # AOCS Trigger
+  aocs-trigger:
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM python:3.10-slim
+        WORKDIR /app
+        COPY shared/ ./shared/
+        COPY subsystem-triggers/requirements.txt .
+        RUN pip install --no-cache-dir -r requirements.txt
+        COPY subsystem-triggers/ .
+        CMD ["python", "aocs_trigger.py"]
+    container_name: aocs-trigger
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672//
+      - CELERY_RESULT_BACKEND=rpc://
+      - WINDOW_SIZE=30
+      - STRIDE=10
+      - FORECAST_HORIZON=10
+    depends_on:
+      - kafka
+      - rabbitmq
+      - demultiplexer
+    networks:
+      - telemetry-net
+    restart: unless-stopped
+
+  # FSW Trigger
+  fsw-trigger:
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM python:3.10-slim
+        WORKDIR /app
+        COPY shared/ ./shared/
+        COPY subsystem-triggers/requirements.txt .
+        RUN pip install --no-cache-dir -r requirements.txt
+        COPY subsystem-triggers/ .
+        CMD ["python", "fsw_trigger.py"]
+    container_name: fsw-trigger
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672//
+      - CELERY_RESULT_BACKEND=rpc://
+      - WINDOW_SIZE=30
+      - STRIDE=10
+      - FORECAST_HORIZON=10
+    depends_on:
+      - kafka
+      - rabbitmq
+      - demultiplexer
+    networks:
+      - telemetry-net
+    restart: unless-stopped
+
+  # Thermal Trigger
+  thermal-trigger:
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM python:3.10-slim
+        WORKDIR /app
+        COPY shared/ ./shared/
+        COPY subsystem-triggers/requirements.txt .
+        RUN pip install --no-cache-dir -r requirements.txt
+        COPY subsystem-triggers/ .
+        CMD ["python", "thermal_trigger.py"]
+    container_name: thermal-trigger
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672//
+      - CELERY_RESULT_BACKEND=rpc://
+      - WINDOW_SIZE=30
+      - STRIDE=10
+      - FORECAST_HORIZON=10
+    depends_on:
+      - kafka
+      - rabbitmq
+      - demultiplexer
+    networks:
+      - telemetry-net
+    restart: unless-stopped
+
+  # Data Trigger
+  data-trigger:
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM python:3.10-slim
+        WORKDIR /app
+        COPY shared/ ./shared/
+        COPY subsystem-triggers/requirements.txt .
+        RUN pip install --no-cache-dir -r requirements.txt
+        COPY subsystem-triggers/ .
+        CMD ["python", "data_trigger.py"]
+    container_name: data-trigger
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672//
+      - CELERY_RESULT_BACKEND=rpc://
+      - WINDOW_SIZE=30
+      - STRIDE=10
+      - FORECAST_HORIZON=10
+    depends_on:
+      - kafka
+      - rabbitmq
+      - demultiplexer
+    networks:
+      - telemetry-net
+    restart: unless-stopped
+
+  # Struct Trigger
+  struct-trigger:
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM python:3.10-slim
+        WORKDIR /app
+        COPY shared/ ./shared/
+        COPY subsystem-triggers/requirements.txt .
+        RUN pip install --no-cache-dir -r requirements.txt
+        COPY subsystem-triggers/ .
+        CMD ["python", "struct_trigger.py"]
+    container_name: struct-trigger
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672//
+      - CELERY_RESULT_BACKEND=rpc://
+      - WINDOW_SIZE=30
+      - STRIDE=10
+      - FORECAST_HORIZON=10
+    depends_on:
+      - kafka
+      - rabbitmq
+      - demultiplexer
+    networks:
+      - telemetry-net
+    restart: unless-stopped
+
+  # Propulsion Trigger
+  propulsion-trigger:
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM python:3.10-slim
+        WORKDIR /app
+        COPY shared/ ./shared/
+        COPY subsystem-triggers/requirements.txt .
+        RUN pip install --no-cache-dir -r requirements.txt
+        COPY subsystem-triggers/ .
+        CMD ["python", "propulsion_trigger.py"]
+    container_name: propulsion-trigger
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672//
+      - CELERY_RESULT_BACKEND=rpc://
+      - WINDOW_SIZE=30
+      - STRIDE=10
+      - FORECAST_HORIZON=10
+    depends_on:
+      - kafka
+      - rabbitmq
+      - demultiplexer
     networks:
       - telemetry-net
     restart: unless-stopped
@@ -347,6 +565,28 @@ services:
       - kafka
     networks:
       - telemetry-net
+    restart: unless-stopped
+
+  # SMAP Simulator - NASA SMAP 실측 데이터 기반 시뮬레이터
+  smap-simulator:
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM python:3.10-slim
+        WORKDIR /app
+        COPY batch-simulator/smap_simulator.py .
+        RUN pip install --no-cache-dir confluent-kafka numpy
+        CMD ["python", "smap_simulator.py", "--kafka", "kafka:9092", "--satellites", "5", "--loops", "999", "--delay", "1000"]
+    volumes:
+      - ./batch-simulator/data:/app/data
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+    depends_on:
+      - kafka
+    networks:
+      - telemetry-net
+    profiles:
+      - smap
     restart: unless-stopped
 
    # TranAD Service - 이상탐지 모델 및 데이터 개발용 

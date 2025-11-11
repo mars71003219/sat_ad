@@ -52,8 +52,10 @@ coverage.xml
 /frontend/node_modules/
 /frontend/build/
 
-# tranad-sim
-/tranad-sim/data/
-/tranad-sim/processed/
-/tranad-sim/plots/
-/tranad-sim/checkpoints/
+# tranad
+/tranad/data/
+/tranad/processed/
+/tranad/plots/
+/tranad/checkpoints/
+
+*.ckpt

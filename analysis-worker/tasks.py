@@ -41,17 +41,31 @@ KAFKA_BOOTSTRAP_SERVERS = os.getenv('KAFKA_BOOTSTRAP_SERVERS', 'kafka:9092')
 # Triton 클라이언트 설정
 TRITON_URL = os.getenv('TRITON_SERVER_URL', 'triton-server:8000')
 
+# 모델 매핑 설정
+MODEL_MAPPING_PATH = os.getenv('MODEL_MAPPING_PATH', '/app/satellite_model_mapping.json')
+
 # 전역 클라이언트 (워커 프로세스당 1개)
 _triton_client = None
 _kafka_producer = None
+_model_mapping = None
 
 
 @signals.worker_process_init.connect
 def init_worker_process(**kwargs):
     """워커 프로세스 초기화 시 클라이언트 생성 (재사용)"""
-    global _triton_client, _kafka_producer
+    global _triton_client, _kafka_producer, _model_mapping
 
     logger.info("Initializing worker process clients...")
+
+    # 모델 매핑 로드
+    try:
+        with open(MODEL_MAPPING_PATH, 'r') as f:
+            mapping_data = json.load(f)
+            _model_mapping = mapping_data['mapping']
+            logger.info(f"Model mapping loaded: {len(_model_mapping)} satellites")
+    except Exception as e:
+        logger.error(f"Failed to load model mapping: {e}")
+        _model_mapping = {}
 
     # Triton 클라이언트 초기화
     try:
@@ -85,6 +99,138 @@ def shutdown_worker_process(**kwargs):
     if _kafka_producer:
         _kafka_producer.flush(timeout=5)
         logger.info("Kafka producer flushed")
+
+
+@celery_app.task(name='analysis_worker.tasks.run_inference')
+def run_inference(
+    satellite_id: str,
+    subsystem: str,
+    window_features: List[List[float]],
+    window_start_time: str,
+    window_end_time: str,
+    service: str = 'anomaly-detection'
+) -> Dict[str, Any]:
+    """
+    OmniAnomaly 모델 추론 실행 (위성-서브시스템 매핑 사용)
+
+    Args:
+        satellite_id: 위성 ID (sat1, sat2, ...)
+        subsystem: 서브시스템 이름 (EPS, ACS, FSW, TCS, Data, SS, PS)
+        window_features: 윈도우 특징 리스트 [[features], ...]
+        window_start_time: 윈도우 시작 시간
+        window_end_time: 윈도우 종료 시간
+        service: 서비스 이름
+
+    Returns:
+        추론 결과
+    """
+    global _triton_client, _model_mapping
+
+    logger.info(f"Inference request: {satellite_id}/{subsystem}")
+    logger.info(f"  Window: {len(window_features)} records")
+
+    start_time = time.time()
+
+    try:
+        # 모델 매핑에서 모델 이름 가져오기
+        if not _model_mapping or satellite_id not in _model_mapping:
+            raise ValueError(f"No model mapping for satellite: {satellite_id}")
+
+        model_name = _model_mapping[satellite_id].get(subsystem)
+        if not model_name:
+            raise ValueError(f"No model for {satellite_id}/{subsystem}")
+
+        logger.info(f"  Model: {model_name}")
+
+        # Triton 클라이언트 확인
+        if _triton_client is None:
+            _triton_client = httpclient.InferenceServerClient(url=TRITON_URL)
+
+        # OmniAnomaly는 단일 레코드를 순차적으로 처리
+        # 윈도우의 각 레코드에 대해 추론 수행
+        anomaly_scores = []
+        reconstructions = []
+
+        for features in window_features:
+            input_array = np.array(features, dtype=np.float64)  # [25,]
+
+            # Triton 입력 생성
+            inputs = [
+                httpclient.InferInput("input_data", input_array.shape, "FP64")
+            ]
+            inputs[0].set_data_from_numpy(input_array)
+
+            # Triton 출력 요청
+            outputs = [
+                httpclient.InferRequestedOutput("reconstruction"),
+                httpclient.InferRequestedOutput("anomaly_score"),
+                httpclient.InferRequestedOutput("anomaly_detected")
+            ]
+
+            # 추론 실행
+            response = _triton_client.infer(
+                model_name=model_name,
+                inputs=inputs,
+                outputs=outputs
+            )
+
+            # 결과 추출
+            reconstruction = response.as_numpy("reconstruction")
+            score = response.as_numpy("anomaly_score")[0]
+            detected = response.as_numpy("anomaly_detected")[0]
+
+            anomaly_scores.append(float(score))
+            reconstructions.append(reconstruction.tolist())
+
+        # 윈도우 전체 anomaly score (평균)
+        mean_anomaly_score = np.mean(anomaly_scores)
+        max_anomaly_score = np.max(anomaly_scores)
+        is_anomaly = max_anomaly_score > 0.16  # OmniAnomaly threshold
+
+        inference_time_ms = (time.time() - start_time) * 1000
+
+        # 결과 구성
+        result = {
+            'satellite_id': satellite_id,
+            'subsystem': subsystem,
+            'model_name': model_name,
+            'window_size': len(window_features),
+            'window_start_time': window_start_time,
+            'window_end_time': window_end_time,
+            'mean_anomaly_score': float(mean_anomaly_score),
+            'max_anomaly_score': float(max_anomaly_score),
+            'is_anomaly': bool(is_anomaly),
+            'anomaly_scores': anomaly_scores,
+            'reconstructions': reconstructions,
+            'inference_time_ms': inference_time_ms,
+            'timestamp': datetime.utcnow().isoformat(),
+            'service': service,
+            'status': 'success'
+        }
+
+        logger.info(f"Inference complete: {satellite_id}/{subsystem}")
+        logger.info(f"  Mean score: {mean_anomaly_score:.4f}, Max: {max_anomaly_score:.4f}")
+        logger.info(f"  Anomaly: {is_anomaly}, Time: {inference_time_ms:.1f}ms")
+
+        # Kafka로 결과 발행
+        publish_inference_result(result)
+
+        return result
+
+    except Exception as e:
+        logger.error(f"Inference failed: {satellite_id}/{subsystem} - {e}", exc_info=True)
+
+        error_result = {
+            'satellite_id': satellite_id,
+            'subsystem': subsystem,
+            'status': 'failed',
+            'error': str(e),
+            'timestamp': datetime.utcnow().isoformat(),
+            'service': service
+        }
+
+        publish_inference_result(error_result)
+        return error_result
 
 
 @celery_app.task(name='analysis_server.tasks.run_subsystem_inference')

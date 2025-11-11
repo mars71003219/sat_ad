@@ -4,13 +4,17 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CHECKPOINT_DIR="/home/hsnam/projects/telemetry_anomaly_det/tranad-sim/checkpoints/OmniAnomaly"
+CHECKPOINT_DIR="/home/hsnam/projects/telemetry_anomaly_det/tranad/checkpoints/OmniAnomaly"
 MODELS_DIR="$SCRIPT_DIR/models"
 
 # List of SMAP entities to deploy
-ENTITIES=("A-1" "A-2" "A-3" "A-4" "A-5" "A-6" "A-7" "A-8" "A-9" \
-          "D-1" "D-2" "D-3" "D-4" "E-1" "E-2" "E-3" \
-          "F-1" "G-1" "P-1" "P-2")
+ENTITIES=("A-1" "A-2" "A-3" "A-4" "A-5" \
+          "D-1" "D-2" "D-3" "D-4" "D-5" \
+          "E-1" "E-2" "E-3" "E-4" "E-5" \
+          "F-1" "F-2" "F-3" \
+          "P-1" "P-2" "P-3" "P-4" "P-7" \
+          "S-1" \
+          "T-1" "T-2" "T-3")
 
 echo "Setting up Triton OmniAnomaly models..."
 
@@ -31,7 +35,7 @@ for entity in "${ENTITIES[@]}"; do
     # Copy checkpoint
     checkpoint_file="$CHECKPOINT_DIR/model_SMAP_${entity}.ckpt"
     if [ -f "$checkpoint_file" ]; then
-        cp "$checkpoint_file" "$model_dir/1/model.ckpt"
+        cp "$checkpoint_file" "$model_dir/1/"
         echo "  ✓ Copied checkpoint for $entity"
     else
         echo "  ✗ Checkpoint not found: $checkpoint_file"

@@ -69,28 +69,34 @@ class TritonPythonModel:
         model_name = self.model_config['name']
         self.entity = model_name.replace('smap_', '')
 
-        # Device selection: GPU if available, else CPU
+        # Device selection: Use GPU if available
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        print(f"[{self.entity}] Using device: {self.device}")
 
         # Load OmniAnomaly model
         self.model = OmniAnomaly(feats=25).double()
 
-        # Load checkpoint - construct path from model_repository
-        # args contains: model_config, model_instance_kind, model_instance_device_id, model_repository, model_version, model_name
-        model_repo = args.get('model_repository', '/models')
-        model_version = args.get('model_version', '1')
-        # model_repo already includes the model name, so just append version
-        model_dir = os.path.join(model_repo, model_version)
-        checkpoint_path = os.path.join(model_dir, 'model.ckpt')
+        print(f"DEBUG: args = {args}")
+
+        # Get the directory of the model.py file
+        model_dir = os.path.join(args['model_repository'], '1')
+        
+        checkpoint_filename = f"model_SMAP_{self.entity}.ckpt"
+        checkpoint_path = os.path.join(model_dir, checkpoint_filename)
+
+        print(f"DEBUG: model_dir = {model_dir}")
+        print(f"DEBUG: checkpoint_path = {checkpoint_path}")
 
         try:
-            checkpoint = torch.load(checkpoint_path, map_location=self.device)
+            # Load checkpoint to CPU first to avoid CUDA kernel compatibility issues
+            checkpoint = torch.load(checkpoint_path, map_location='cpu')
             self.model.load_state_dict(checkpoint['model_state_dict'])
+            # Then move to target device
             self.model.to(self.device)
             self.model.eval()
-            print(f"[OmniAnomaly {self.entity}] Model loaded successfully on {self.device}")
+            print(f"[OmniAnomaly {self.entity}] Model loaded successfully on {self.device} from {checkpoint_path}")
         except Exception as e:
-            print(f"[OmniAnomaly {self.entity}] Failed to load checkpoint: {e}")
+            print(f"[OmniAnomaly {self.entity}] Failed to load checkpoint from {checkpoint_path}: {e}")
             raise
 
         # Anomaly threshold (from POT evaluation, dataset-specific)
@@ -145,7 +151,7 @@ class TritonPythonModel:
                 )
                 out_detected = pb_utils.Tensor(
                     "anomaly_detected",
-                    np.array([detected], dtype=bool)
+                    np.array([detected], dtype=np.int8)
                 )
 
                 # Create inference response
@@ -169,3 +175,4 @@ class TritonPythonModel:
         """Cleanup when model is unloaded"""
         print(f"[OmniAnomaly {self.entity}] Model finalized")
         self.hidden = None
+

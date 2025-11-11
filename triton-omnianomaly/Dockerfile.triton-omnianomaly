@@ -1,50 +1,61 @@
-# Triton Server with OmniAnomaly Model Support
-# Base: NVIDIA Triton Server with GPU support
-FROM nvcr.io/nvidia/tritonserver:24.08-py3
+# Triton Server with OmniAnomaly Model Support (CUDA 12.x for RTX 50/40 series)
+
+# 1. Base Image: Triton Server 24.05 (Py3)
+# RTX 5060 (sm_120)을 지원하기 위해 CUDA 12.4 기반의 최신 이미지로 변경.
+# (Ubuntu 22.04, Python 3.10 포함)
+FROM nvcr.io/nvidia/tritonserver:24.05-py3
 
 # Set environment variables
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE 1
+ENV PYTHONUNBUFFERED 1
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install system dependencies
+# Install System Deps: libcurl4 and all fonts required for Matplotlib
+# (Base 이미지가 22.04로 변경되었으나 패키지 이름은 동일함)
 RUN apt-get update && \
-    apt-get install -y \
-    software-properties-common \
-    libcurl4 \
-    git \
-    curl \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
+    apt-get install -y --no-install-recommends \
+    libcurl4 fontconfig \
+    fonts-freefont-ttf fonts-liberation fonts-dejavu \
+    gsfonts gsfonts-x11 fonts-liberation2 && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Install PyTorch with CUDA support
-# Triton 24.08 uses CUDA 12.5, install compatible PyTorch
-RUN pip install --no-cache-dir \
-    torch==2.4.0 \
-    torchvision==0.19.0 \
-    --index-url https://download.pytorch.org/whl/cu121
+# Install Microsoft Core Fonts (e.g., Times New Roman)
+RUN echo "ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula select true" | debconf-set-selections && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends ttf-mscorefonts-installer && \
+    fc-cache -fv && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Install additional dependencies for OmniAnomaly
-RUN pip install --no-cache-dir \
-    numpy==1.26.4 \
-    pandas==2.2.2 \
-    scikit-learn==1.5.1
+# Update pip
+# (Base 이미지의 기본 Python은 3.10임)
+RUN python3 -m pip install --upgrade pip
 
-# Copy TranAD source code (contains OmniAnomaly model definition)
+# Install Python dependencies - STACK UPGRADED FOR CUDA 12.x
+
+# 1. PyTorch 2.x (compatible with CUDA 12.1)
+# RTX 5060 (sm_120)을 지원하기 위해 PyTorch 1.12(cu113)에서 2.x(cu121)로 업그레이드
+RUN pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+
+# 2. DGL compatible with PyTorch 2.x and CUDA 12.1
+# PyTorch 버전에 맞춰 DGL도 cu121로 업그레이드
+RUN pip install dgl -f https://data.dgl.ai/wheels/cu121/repo.html
+
+# 3. Install minimal Python dependencies for OmniAnomaly
+RUN pip install --no-cache-dir numpy pandas scikit-learn pyyaml pydantic
+
+# Copy common model implementation for Triton
 WORKDIR /workspace
-COPY tranad-sim/src /workspace/tranad_src
-
-# Copy common model implementation
 COPY triton-omnianomaly/common /workspace/common
 
-# Model repository
+# Set up model repository
 WORKDIR /models
 VOLUME ["/models"]
 
-# Healthcheck
+# Healthcheck (원본과 동일)
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
     CMD curl -f http://localhost:8000/v2/health/ready || exit 1
 
-# Triton server startup
+# Triton server startup command (원본과 동일)
 CMD ["tritonserver", \
      "--model-repository=/models", \
      "--strict-model-config=false", \

@@ -1,0 +1,45 @@
+# 토픽 중심 아키텍처 - Demux 설정
+#
+# 이 파일은 "데이터 라우팅"만 정의합니다.
+# 서비스(anomaly, scheduling, health 등)는 알 필요 없습니다.
+
+kafka:
+  bootstrap_servers: kafka:9092
+  input_topic: satellite-telemetry-raw
+
+# 라우팅 규칙: 서브시스템 → 공용 토픽
+routing:
+  EPS:
+    target_topic: telemetry.public.eps
+    description: "Electric Power System - 전력계"
+
+  ACS:
+    target_topic: telemetry.public.aocs
+    description: "Attitude Control System - 자세제어계"
+
+  FSW:
+    target_topic: telemetry.public.fsw
+    description: "Flight Software - 비행소프트웨어"
+
+  TCS:
+    target_topic: telemetry.public.thermal
+    description: "Thermal Control System - 열제어계"
+
+  Data:
+    target_topic: telemetry.public.data
+    description: "Data Handling - 원격측정명령계"
+
+  SS:
+    target_topic: telemetry.public.struct
+    description: "Structure System - 구조계"
+
+  PS:
+    target_topic: telemetry.public.propulsion
+    description: "Propulsion System - 추진계"
+
+# 확장 예시:
+# 새로운 서브시스템 추가 시 여기에만 추가하면 됨
+#
+# NEW_SUBSYSTEM:
+#   target_topic: telemetry.public.new_subsystem
+#   description: "새로운 서브시스템"

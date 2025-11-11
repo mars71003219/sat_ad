@@ -27,9 +27,9 @@ logger = logging.getLogger(__name__)
 
 # Configuration
 KAFKA_BOOTSTRAP_SERVERS = 'kafka:9092'
-KAFKA_TOPIC_TELEMETRY = 'satellite-telemetry'
+KAFKA_TOPIC_TELEMETRY = 'satellite-telemetry-raw'  # Fan-out: raw 토픽 구독
 KAFKA_TOPIC_INFERENCE = 'inference-results'
-KAFKA_GROUP_ID = 'victoria-consumer-group-v4-async'
+KAFKA_GROUP_ID = 'victoria-consumer-group-v5-fanout'
 VICTORIA_METRICS_URL = 'http://victoria-metrics:8428'
 VICTORIA_WRITE_ENDPOINT = f'{VICTORIA_METRICS_URL}/api/v1/import/prometheus'
 
