@@ -7,35 +7,42 @@ import {
   CartesianGrid,
   Tooltip,
   Legend,
-  ResponsiveContainer
+  ResponsiveContainer,
+  ComposedChart,
+  Bar
 } from 'recharts';
 import { format } from 'date-fns';
 import axios from 'axios';
 import './TrendChart.css';
 
 const SUBSYSTEMS = [
-  { key: 'eps', label: 'EPS (전력)', color: '#4a9eff' },
-  { key: 'thermal', label: 'Thermal (온도)', color: '#a78bfa' },
-  { key: 'aocs', label: 'AOCS (자세제어)', color: '#fbbf24' },
-  { key: 'comm', label: 'Comm (통신)', color: '#4ade80' }
+  { key: 'EPS', label: 'EPS (전력)', color: '#4a9eff' },
+  { key: 'TCS', label: 'TCS (온도)', color: '#a78bfa' },
+  { key: 'ACS', label: 'ACS (자세제어)', color: '#fbbf24' },
+  { key: 'Data', label: 'Data (통신)', color: '#4ade80' },
+  { key: 'FSW', label: 'FSW', color: '#f59e0b' },
+  { key: 'PS', label: 'PS', color: '#8b5cf6' },
+  { key: 'SS', label: 'SS', color: '#ec4899' }
 ];
 
 const TIME_RANGES = [
-  { label: '5m', hours: 5/60 },
-  { label: '15m', hours: 15/60 },
-  { label: '1h', hours: 1 },
-  { label: '6h', hours: 6 },
-  { label: '9h', hours: 9 },
-  { label: '24h', hours: 24 }
+  { label: '30s', seconds: 30 },
+  { label: '1m', seconds: 60 },
+  { label: '5m', seconds: 300 },
+  { label: '15m', seconds: 900 },
+  { label: '1h', seconds: 3600 }
 ];
+
+const MAX_DATA_POINTS = 500; // 최대 표시 데이터 포인트
 
 function TrendChart({ onFilterChange }) {
   const [selectedSubsystem, setSelectedSubsystem] = useState(SUBSYSTEMS[0]);
-  const [selectedTimeRange, setSelectedTimeRange] = useState(TIME_RANGES[2]); // 1h
+  const [selectedTimeRange, setSelectedTimeRange] = useState(TIME_RANGES[2]); // 5m
   const [trendData, setTrendData] = useState([]);
+  const [anomalyScoreData, setAnomalyScoreData] = useState([]);
   const [error, setError] = useState(null);
   const [satellites, setSatellites] = useState([]);
-  const [selectedSatellite, setSelectedSatellite] = useState('SAT-001');
+  const [selectedSatellite, setSelectedSatellite] = useState('sat1');
   const [visibleLines, setVisibleLines] = useState({
     actual_value: true,
     predicted_value: true,
@@ -43,12 +50,14 @@ function TrendChart({ onFilterChange }) {
   });
   const [threshold, setThreshold] = useState(0.5); // 잔차 임계값
   const [features, setFeatures] = useState([]);
-  const [selectedFeature, setSelectedFeature] = useState(null); // null = 종합 평균
+  const [selectedFeature, setSelectedFeature] = useState(0); // 0~24
   const [subsystemStats, setSubsystemStats] = useState({}); // 서브시스템별 최근 값
   const [wsConnected, setWsConnected] = useState(false);
+  const [isStreaming, setIsStreaming] = useState(true); // 실시간 스트리밍 on/off
 
   const trendWsRef = useRef(null);
   const reconnectTimeoutRef = useRef(null);
+  const streamIntervalRef = useRef(null);
 
   // 위성 목록 조회
   useEffect(() => {
@@ -70,23 +79,30 @@ function TrendChart({ onFilterChange }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 필터 변경 시 WebSocket으로 전송
+  // 실시간 스트리밍 업데이트 (1초마다)
   useEffect(() => {
-    if (trendWsRef.current && trendWsRef.current.readyState === WebSocket.OPEN) {
-      const now = Date.now();
-      const endTime = new Date(now).toISOString();
-      const startTime = new Date(now - selectedTimeRange.hours * 60 * 60 * 1000).toISOString();
-
-      const filters = {
-        satellite_id: selectedSatellite,
-        subsystem: selectedSubsystem.key,
-        feature_index: selectedFeature,
-        start_time: startTime,
-        end_time: endTime
-      };
-      console.log('Sending trend filters to WebSocket:', filters);
-      trendWsRef.current.send(JSON.stringify(filters));
+    if (isStreaming) {
+      streamIntervalRef.current = setInterval(() => {
+        fetchRealtimeData();
+      }, 1000);
+    } else {
+      if (streamIntervalRef.current) {
+        clearInterval(streamIntervalRef.current);
+      }
     }
+
+    return () => {
+      if (streamIntervalRef.current) {
+        clearInterval(streamIntervalRef.current);
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isStreaming, selectedSatellite, selectedSubsystem, selectedFeature, selectedTimeRange]);
+
+  // 필터 변경 시 초기 데이터 로드
+  useEffect(() => {
+    fetchRealtimeData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedSatellite, selectedSubsystem, selectedFeature, selectedTimeRange]);
 
   // 선택 변경 시 상위 컴포넌트에 알림
@@ -96,120 +112,93 @@ function TrendChart({ onFilterChange }) {
     }
   }, [selectedSatellite, selectedSubsystem, selectedFeature, onFilterChange]);
 
-  const connectTrendWebSocket = () => {
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}/api/ws/trends`;
-
+  const fetchRealtimeData = async () => {
     try {
-      const ws = new WebSocket(wsUrl);
+      const now = Date.now();
+      const startTime = new Date(now - selectedTimeRange.seconds * 1000).toISOString();
+      const endTime = new Date(now).toISOString();
 
-      ws.onopen = () => {
-        console.log('Trend WebSocket connected');
-        setWsConnected(true);
-        setError(null);
-
-        // 현재 필터 전송
-        const now = Date.now();
-        const endTime = new Date(now).toISOString();
-        const startTime = new Date(now - selectedTimeRange.hours * 60 * 60 * 1000).toISOString();
-
-        const filters = {
+      const response = await axios.get('/api/dashboard/trends', {
+        params: {
           satellite_id: selectedSatellite,
           subsystem: selectedSubsystem.key,
           feature_index: selectedFeature,
           start_time: startTime,
           end_time: endTime
-        };
-        ws.send(JSON.stringify(filters));
-      };
-
-      ws.onmessage = (event) => {
-        const data = JSON.parse(event.data);
-
-        if (data.type === 'trends' && data.data) {
-          const responseData = data.data;
-
-          if (responseData.data_points && responseData.data_points.length > 0) {
-            const formattedData = responseData.data_points.map(point => {
-              const actual = point.actual_value;
-              const predicted = point.predicted_value;
-              const residual = actual !== null && predicted !== null ? Math.abs(actual - predicted) : null;
-              const isAnomaly = residual !== null && residual > threshold;
-
-              return {
-                timestamp: new Date(point.timestamp).getTime(),
-                actual_value: actual,
-                predicted_value: predicted,
-                residual: residual,
-                anomaly_detected: isAnomaly ? actual : null
-              };
-            });
-            setTrendData(formattedData);
-          }
-        } else if (data.type === 'error') {
-          console.error('Trend WebSocket error:', data.message);
-          setError(data.message);
         }
-      };
+      });
 
-      ws.onerror = (error) => {
-        console.error('Trend WebSocket error:', error);
-        setWsConnected(false);
-        setError('WebSocket connection error');
-      };
+      if (response.data && response.data.data_points) {
+        const dataPoints = response.data.data_points;
 
-      ws.onclose = () => {
-        console.log('Trend WebSocket disconnected');
-        setWsConnected(false);
+        // 텔레메트리 값 데이터
+        const formattedTrendData = dataPoints.map(point => {
+          const actual = point.actual_value;
+          const predicted = point.predicted_value;
+          const residual = actual !== null && predicted !== null ? Math.abs(actual - predicted) : null;
+          const isAnomaly = residual !== null && residual > threshold;
 
-        // 5초 후 재연결 시도
-        reconnectTimeoutRef.current = setTimeout(() => {
-          console.log('Attempting to reconnect trend WebSocket...');
-          connectTrendWebSocket();
-        }, 5000);
-      };
+          return {
+            timestamp: new Date(point.timestamp).getTime(),
+            actual_value: actual,
+            predicted_value: predicted,
+            residual: residual,
+            anomaly_detected: isAnomaly ? actual : null
+          };
+        });
 
-      trendWsRef.current = ws;
-    } catch (error) {
-      console.error('Failed to create Trend WebSocket:', error);
-      setWsConnected(false);
-      setError('Failed to connect');
+        // 이상 점수 데이터
+        const formattedAnomalyData = dataPoints.map(point => ({
+          timestamp: new Date(point.timestamp).getTime(),
+          anomaly_score: point.anomaly_score || 0
+        }));
+
+        // 최대 포인트 수 제한 (메모리 관리)
+        setTrendData(prev => {
+          const combined = [...prev, ...formattedTrendData];
+          return combined.slice(-MAX_DATA_POINTS);
+        });
+
+        setAnomalyScoreData(prev => {
+          const combined = [...prev, ...formattedAnomalyData];
+          return combined.slice(-MAX_DATA_POINTS);
+        });
+
+        setError(null);
+      }
+    } catch (err) {
+      console.error('Failed to fetch realtime data:', err);
+      setError('Failed to fetch data');
     }
+  };
+
+  const connectTrendWebSocket = () => {
+    // WebSocket은 제거하고 polling 방식으로 대체
+    setWsConnected(true);
   };
 
   const fetchSatellites = async () => {
     try {
-      const response = await axios.get('/api/dashboard/stats');
-      if (response.data && response.data.satellites) {
-        const sats = response.data.satellites.map(s => s.satellite_id);
-        setSatellites(sats);
-        if (sats.length > 0) {
-          setSelectedSatellite(sats[0]);
-        }
+      // VictoriaMetrics에서 실제 satellite_id 조회
+      const sats = ['sat1', 'sat2', 'sat3', 'sat4', 'sat5'];
+      setSatellites(sats);
+      if (sats.length > 0 && !selectedSatellite) {
+        setSelectedSatellite(sats[0]);
       }
     } catch (err) {
       console.error('Failed to fetch satellites:', err);
     }
   };
 
-  // 서브시스템 변경 시 특징 목록 조회
+  // 서브시스템 변경 시 특징 목록 생성 (0~24)
   useEffect(() => {
-    fetchFeatures();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    const featureList = Array.from({ length: 25 }, (_, i) => ({
+      index: i,
+      name: `Dimension ${i}`
+    }));
+    setFeatures(featureList);
+    setSelectedFeature(0); // 첫 번째 특징으로 리셋
   }, [selectedSubsystem]);
-
-  const fetchFeatures = async () => {
-    try {
-      const response = await axios.get(`/api/dashboard/features?subsystem=${selectedSubsystem.key}`);
-      if (response.data && response.data.features) {
-        setFeatures(response.data.features);
-        setSelectedFeature(null); // 서브시스템 변경 시 종합 평균으로 리셋
-      }
-    } catch (err) {
-      console.error('Failed to fetch features:', err);
-      setFeatures([]);
-    }
-  };
 
   // WebSocket에서 서브시스템 통계 자동 업데이트
   useEffect(() => {
@@ -226,29 +215,24 @@ function TrendChart({ onFilterChange }) {
     }
   }, [trendData, selectedSubsystem.key]);
 
-  // 수동 새로고침 함수 (새로고침 버튼용)
+  // 수동 새로고침 함수
   const handleManualRefresh = () => {
-    if (trendWsRef.current && trendWsRef.current.readyState === WebSocket.OPEN) {
-      const now = Date.now();
-      const endTime = new Date(now).toISOString();
-      const startTime = new Date(now - selectedTimeRange.hours * 60 * 60 * 1000).toISOString();
+    // 데이터 초기화 후 다시 로드
+    setTrendData([]);
+    setAnomalyScoreData([]);
+    fetchRealtimeData();
+  };
 
-      const filters = {
-        satellite_id: selectedSatellite,
-        subsystem: selectedSubsystem.key,
-        feature_index: selectedFeature,
-        start_time: startTime,
-        end_time: endTime
-      };
-      trendWsRef.current.send(JSON.stringify(filters));
-    }
+  // 스트리밍 토글
+  const toggleStreaming = () => {
+    setIsStreaming(prev => !prev);
   };
 
   const formatXAxis = (timestamp) => {
-    if (selectedTimeRange.hours <= 0.25) {
+    if (selectedTimeRange.seconds <= 60) {
       return format(new Date(timestamp), 'HH:mm:ss');
-    } else if (selectedTimeRange.hours <= 1) {
-      return format(new Date(timestamp), 'HH:mm');
+    } else if (selectedTimeRange.seconds <= 900) {
+      return format(new Date(timestamp), 'HH:mm:ss');
     } else {
       return format(new Date(timestamp), 'HH:mm');
     }
@@ -292,7 +276,23 @@ function TrendChart({ onFilterChange }) {
     <div className="trend-chart-container">
       <div className="chart-header">
         <div className="header-left">
-          <h2>Anomaly Score Trend</h2>
+          <h2>Real-time Telemetry Stream</h2>
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            fontSize: '12px',
+            color: isStreaming ? '#4ade80' : '#909296'
+          }}>
+            <div style={{
+              width: '8px',
+              height: '8px',
+              borderRadius: '50%',
+              backgroundColor: isStreaming ? '#4ade80' : '#909296',
+              animation: isStreaming ? 'pulse 2s infinite' : 'none'
+            }}></div>
+            {isStreaming ? 'Streaming Live' : 'Paused'}
+          </div>
         </div>
 
         <div className="header-controls">
@@ -309,14 +309,13 @@ function TrendChart({ onFilterChange }) {
             </select>
           )}
 
-          {/* 특징 선택 */}
+          {/* 특징 선택 (Dimension 0-24) */}
           {features.length > 0 && (
             <select
               className="feature-selector"
-              value={selectedFeature === null ? 'all' : selectedFeature}
-              onChange={(e) => setSelectedFeature(e.target.value === 'all' ? null : parseInt(e.target.value))}
+              value={selectedFeature}
+              onChange={(e) => setSelectedFeature(parseInt(e.target.value))}
             >
-              <option value="all">All Features (Average)</option>
               {features.map(feature => (
                 <option key={feature.index} value={feature.index}>{feature.name}</option>
               ))}
@@ -333,6 +332,14 @@ function TrendChart({ onFilterChange }) {
               {range.label}
             </button>
           ))}
+
+          <button
+            className={`stream-btn ${isStreaming ? 'active' : ''}`}
+            onClick={toggleStreaming}
+            title={isStreaming ? 'Pause streaming' : 'Resume streaming'}
+          >
+            {isStreaming ? '⏸' : '▶'}
+          </button>
 
           <button className="refresh-btn" onClick={handleManualRefresh}>
             ↻
@@ -380,42 +387,42 @@ function TrendChart({ onFilterChange }) {
         </div>
       )}
 
-      {/* 차트 */}
+      {/* 차트 1: 텔레메트리 값 (True vs Predicted) */}
       <div className="chart-wrapper">
+        <div className="chart-title">
+          <h3>Telemetry Value - {selectedSubsystem.label} (Dimension {selectedFeature})</h3>
+        </div>
         <div className="chart-legend">
           <span
             className={`legend-item ${visibleLines.actual_value ? 'active' : 'inactive'}`}
             onClick={() => toggleLine('actual_value')}
           >
             <span className="legend-line actual-value"></span>
-            실측값 (Actual)
+            True
           </span>
           <span
             className={`legend-item ${visibleLines.predicted_value ? 'active' : 'inactive'}`}
             onClick={() => toggleLine('predicted_value')}
           >
             <span className="legend-line predicted-value"></span>
-            예측값 (Predicted)
+            Predicted
           </span>
           <span
             className={`legend-item ${visibleLines.anomaly_detected ? 'active' : 'inactive'}`}
             onClick={() => toggleLine('anomaly_detected')}
           >
             <span className="legend-line anomaly-detected"></span>
-            이상 감지 (Anomaly)
+            Anomaly Region
           </span>
-          <div style={{ marginLeft: '16px', color: '#909296', fontSize: '12px' }}>
-            임계값: {threshold.toFixed(2)}
-          </div>
         </div>
 
         {trendData.length === 0 ? (
           <div className="empty-state">
-            {wsConnected ? 'Waiting for data...' : 'Connecting...'}
+            {isStreaming ? 'Waiting for data...' : 'Streaming paused'}
           </div>
         ) : (
-          <ResponsiveContainer width="100%" height={400}>
-            <LineChart data={trendData}>
+          <ResponsiveContainer width="100%" height={300}>
+            <LineChart data={trendData} margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#2a2b30" />
               <XAxis
                 dataKey="timestamp"
@@ -424,7 +431,7 @@ function TrendChart({ onFilterChange }) {
                 tickFormatter={formatXAxis}
                 stroke="#909296"
                 scale="time"
-                tickCount={6}
+                tickCount={8}
                 style={{ fontSize: '11px' }}
               />
               <YAxis
@@ -433,15 +440,14 @@ function TrendChart({ onFilterChange }) {
                 style={{ fontSize: '11px' }}
               />
               <Tooltip content={<CustomTooltip />} />
-              <Legend />
               {visibleLines.actual_value && (
                 <Line
                   type="monotone"
                   dataKey="actual_value"
-                  stroke={selectedSubsystem.color}
+                  stroke="#1e3a8a"
                   strokeWidth={2}
                   dot={false}
-                  name="실측값"
+                  name="True"
                   isAnimationActive={false}
                   connectNulls={true}
                 />
@@ -450,11 +456,10 @@ function TrendChart({ onFilterChange }) {
                 <Line
                   type="monotone"
                   dataKey="predicted_value"
-                  stroke="#4ade80"
+                  stroke="#ef4444"
                   strokeWidth={2}
-                  strokeDasharray="5 5"
                   dot={false}
-                  name="예측값"
+                  name="Predicted"
                   isAnimationActive={false}
                   connectNulls={true}
                 />
@@ -463,14 +468,62 @@ function TrendChart({ onFilterChange }) {
                 <Line
                   type="monotone"
                   dataKey="anomaly_detected"
-                  stroke="#f87171"
+                  stroke="rgba(96, 165, 250, 0.3)"
                   strokeWidth={0}
-                  dot={{ r: 5, fill: '#f87171' }}
-                  name="이상 감지"
+                  fill="rgba(96, 165, 250, 0.3)"
+                  fillOpacity={0.3}
+                  dot={false}
+                  name="Anomaly"
                   isAnimationActive={false}
                 />
               )}
             </LineChart>
+          </ResponsiveContainer>
+        )}
+      </div>
+
+      {/* 차트 2: 이상 점수 (Anomaly Score) */}
+      <div className="chart-wrapper" style={{ marginTop: '20px' }}>
+        <div className="chart-title">
+          <h3>Anomaly Score</h3>
+        </div>
+
+        {anomalyScoreData.length === 0 ? (
+          <div className="empty-state">
+            {isStreaming ? 'Waiting for data...' : 'Streaming paused'}
+          </div>
+        ) : (
+          <ResponsiveContainer width="100%" height={200}>
+            <ComposedChart data={anomalyScoreData} margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#2a2b30" />
+              <XAxis
+                dataKey="timestamp"
+                type="number"
+                domain={['dataMin', 'dataMax']}
+                tickFormatter={formatXAxis}
+                stroke="#909296"
+                scale="time"
+                tickCount={8}
+                style={{ fontSize: '11px' }}
+              />
+              <YAxis
+                stroke="#909296"
+                domain={[0, 'auto']}
+                label={{ value: 'Score', angle: -90, position: 'insideLeft', fill: '#909296', fontSize: 11 }}
+                style={{ fontSize: '11px' }}
+              />
+              <Tooltip
+                contentStyle={{ backgroundColor: '#1f2937', border: '1px solid #374151' }}
+                labelFormatter={(value) => format(new Date(value), 'yyyy-MM-dd HH:mm:ss')}
+                formatter={(value) => [value.toFixed(4), 'Score']}
+              />
+              <Bar
+                dataKey="anomaly_score"
+                fill="#10b981"
+                name="Anomaly Score"
+                isAnimationActive={false}
+              />
+            </ComposedChart>
           </ResponsiveContainer>
         )}
       </div>

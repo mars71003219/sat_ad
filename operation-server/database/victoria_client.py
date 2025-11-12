@@ -83,6 +83,38 @@ class VictoriaMetricsClient:
             logger.error(f"Error querying VictoriaMetrics: {e}")
             return None
 
+    async def query_range(
+        self,
+        query: str,
+        start: str,
+        end: str,
+        step: str = '30s'
+    ) -> Optional[List[Dict[str, Any]]]:
+        """PromQL range 쿼리 실행 (비동기)"""
+        try:
+            params = {
+                "query": query,
+                "start": start,
+                "end": end,
+                "step": step
+            }
+
+            client = await self._get_client()
+            response = await client.get(self.range_query_url, params=params)
+            response.raise_for_status()
+
+            data = response.json()
+            if data.get("status") == "success":
+                result = data.get("data", {}).get("result", [])
+                return result
+            else:
+                logger.error(f"Range query failed: {data.get('error')}")
+                return None
+
+        except Exception as e:
+            logger.error(f"Error querying VictoriaMetrics range: {e}")
+            return None
+
     async def get_recent_inference_results(
         self,
         limit: int = 10,

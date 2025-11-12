@@ -71,3 +71,7 @@ python/*/1/__pycache__/
 *.pyc
 __pycache__/
 .DS_Store
+
+CLAUDE.md
+GEMINI.md
+.claude

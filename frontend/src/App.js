@@ -6,8 +6,8 @@ import './App.css';
 function App() {
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [selectedSatellite, setSelectedSatellite] = useState('SAT-001');
-  const [selectedSubsystem, setSelectedSubsystem] = useState('eps');
+  const [selectedSatellite, setSelectedSatellite] = useState('sat1');
+  const [selectedSubsystem, setSelectedSubsystem] = useState('EPS');
   const [selectedFeatureIndex, setSelectedFeatureIndex] = useState(null);
   const [recentInferences, setRecentInferences] = useState([]);
   const [wsConnected, setWsConnected] = useState(false);

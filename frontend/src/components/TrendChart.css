@@ -17,6 +17,12 @@
   gap: 12px;
 }
 
+.header-left {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
 .header-left h2 {
   margin: 0;
   font-size: 16px;
@@ -99,6 +105,29 @@
   cursor: not-allowed;
 }
 
+.stream-btn {
+  background-color: #1a1b1e;
+  color: #c1c2c5;
+  border: 1px solid #2a2b30;
+  padding: 6px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: all 0.2s;
+  min-width: 38px;
+}
+
+.stream-btn:hover {
+  border-color: #4ade80;
+  background-color: #25262b;
+}
+
+.stream-btn.active {
+  border-color: #4ade80;
+  background-color: rgba(74, 222, 128, 0.1);
+  color: #4ade80;
+}
+
 /* 서브시스템 카드 */
 .subsystems-grid {
   display: grid;
@@ -169,6 +198,22 @@
 /* 차트 래퍼 */
 .chart-wrapper {
   margin-top: 14px;
+  background-color: #1a1b1e;
+  border: 1px solid #2a2b30;
+  border-radius: 4px;
+  padding: 16px;
+}
+
+.chart-title {
+  margin-bottom: 12px;
+}
+
+.chart-title h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: #ffffff;
+  letter-spacing: -0.2px;
 }
 
 .chart-legend {
@@ -211,25 +256,16 @@
 }
 
 .legend-line.actual-value {
-  background-color: #4a9eff;
+  background-color: #1e3a8a;
 }
 
 .legend-line.predicted-value {
-  background: repeating-linear-gradient(
-    to right,
-    #4ade80 0px,
-    #4ade80 5px,
-    transparent 5px,
-    transparent 10px
-  );
-  height: 3px;
+  background-color: #ef4444;
 }
 
 .legend-line.anomaly-detected {
-  width: 8px;
+  background-color: rgba(96, 165, 250, 0.5);
   height: 8px;
-  border-radius: 50%;
-  background-color: #fa5252;
 }
 
 /* 빈 상태 */
