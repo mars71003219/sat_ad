@@ -120,10 +120,18 @@ async def process_inference_result(session: aiohttp.ClientSession, data: Dict[st
             }
 
             # Anomaly metrics
-            if 'anomaly_score' in data:
+            if 'mean_anomaly_score' in data:
                 metrics.append(format_prometheus_metric(
-                    'inference_anomaly_score',
-                    data['anomaly_score'],
+                    'inference_anomaly_score_mean',
+                    data['mean_anomaly_score'],
+                    labels,
+                    timestamp_ms
+                ))
+
+            if 'max_anomaly_score' in data:
+                metrics.append(format_prometheus_metric(
+                    'inference_anomaly_score_max',
+                    data['max_anomaly_score'],
                     labels,
                     timestamp_ms
                 ))
@@ -136,6 +144,23 @@ async def process_inference_result(session: aiohttp.ClientSession, data: Dict[st
                     timestamp_ms
                 ))
 
+            # Anomaly scores per timestep
+            anomaly_scores = data.get('anomaly_scores', [])
+            if anomaly_scores and isinstance(anomaly_scores, list):
+                import numpy as np
+                for step_idx, score in enumerate(anomaly_scores):
+                    if isinstance(score, (int, float)):
+                        score_labels = labels.copy()
+                        score_labels['timestep'] = str(step_idx)
+                        # 윈도우 시작 시간 기준으로 각 스텝의 타임스탬프 계산 (1초 간격)
+                        step_timestamp_ms = timestamp_ms + (step_idx * 1000)
+                        metrics.append(format_prometheus_metric(
+                            'inference_anomaly_score',
+                            float(score),
+                            score_labels,
+                            step_timestamp_ms
+                        ))
+
             # Inference time
             if 'inference_time_ms' in data:
                 metrics.append(format_prometheus_metric(
@@ -145,81 +170,44 @@ async def process_inference_result(session: aiohttp.ClientSession, data: Dict[st
                     timestamp_ms
                 ))
 
-            # Predictions
-            predictions = data.get('predictions', [])
+            # Reconstructions (예측/복원값)
+            reconstructions = data.get('reconstructions', [])
 
-            if predictions and isinstance(predictions, list) and len(predictions) > 0:
+            if reconstructions and isinstance(reconstructions, list) and len(reconstructions) > 0:
                 import numpy as np
-                pred_array = np.array(predictions)
 
-                # 예측값 통계
-                metrics.append(format_prometheus_metric(
-                    'inference_prediction_mean',
-                    float(np.mean(pred_array)),
-                    labels,
-                    timestamp_ms
-                ))
+                # 각 타임스텝별 복원값 처리
+                for step_idx, recon_step in enumerate(reconstructions):
+                    step_timestamp_ms = timestamp_ms + (step_idx * 1000)  # 1초 간격
 
-                metrics.append(format_prometheus_metric(
-                    'inference_prediction_std',
-                    float(np.std(pred_array)),
-                    labels,
-                    timestamp_ms
-                ))
+                    # recon_step은 [[feature_0, feature_1, ...]] 형식
+                    if isinstance(recon_step, list) and len(recon_step) > 0:
+                        features = recon_step[0]  # 첫 번째 배열 추출
 
-                metrics.append(format_prometheus_metric(
-                    'inference_prediction_min',
-                    float(np.min(pred_array)),
-                    labels,
-                    timestamp_ms
-                ))
+                        if isinstance(features, list):
+                            # 각 특징별 복원값 메트릭
+                            for feature_idx, feature_value in enumerate(features):
+                                if isinstance(feature_value, (int, float)):
+                                    feature_labels = labels.copy()
+                                    feature_labels['timestep'] = str(step_idx)
+                                    feature_labels['feature_index'] = str(feature_idx)
 
-                metrics.append(format_prometheus_metric(
-                    'inference_prediction_max',
-                    float(np.max(pred_array)),
-                    labels,
-                    timestamp_ms
-                ))
+                                    metrics.append(format_prometheus_metric(
+                                        'inference_reconstruction',
+                                        float(feature_value),
+                                        feature_labels,
+                                        step_timestamp_ms
+                                    ))
 
-                # 각 예측 스텝
-                for step_idx, pred_values in enumerate(predictions):
-                    pred_timestamp_ms = timestamp_ms + (step_idx * 30 * 1000)
-
-                    if isinstance(pred_values, (list, np.ndarray)):
-                        # 각 특징별 메트릭
-                        for feature_idx, feature_value in enumerate(pred_values):
-                            feature_labels = labels.copy()
-                            feature_labels['forecast_step'] = str(step_idx)
-                            feature_labels['feature_index'] = str(feature_idx)
-
+                            # 타임스텝별 복원값 평균
+                            recon_labels = labels.copy()
+                            recon_labels['timestep'] = str(step_idx)
                             metrics.append(format_prometheus_metric(
-                                'inference_prediction_feature',
-                                float(feature_value),
-                                feature_labels,
-                                pred_timestamp_ms
+                                'inference_reconstruction_mean',
+                                float(np.mean(features)),
+                                recon_labels,
+                                step_timestamp_ms
                             ))
-
-                        # 평균값
-                        avg_value = float(np.mean(pred_values))
-                        avg_labels = labels.copy()
-                        avg_labels['forecast_step'] = str(step_idx)
-
-                        metrics.append(format_prometheus_metric(
-                            'inference_prediction_mean',
-                            avg_value,
-                            avg_labels,
-                            pred_timestamp_ms
-                        ))
-                    else:
-                        pred_labels = labels.copy()
-                        pred_labels['forecast_step'] = str(step_idx)
-
-                        metrics.append(format_prometheus_metric(
-                            'inference_prediction_mean',
-                            float(pred_values),
-                            pred_labels,
-                            pred_timestamp_ms
-                        ))
 
             # Confidence statistics
             confidence = data.get('confidence')
@@ -276,20 +264,42 @@ async def process_telemetry_data(session: aiohttp.ClientSession, data: Dict[str,
         base_labels = {'satellite_id': satellite_id}
         metrics = []
 
-        # Extract all numeric fields directly
+        # Extract all numeric fields directly (loop, record_index 등)
         for key, value in telemetry_data.items():
-            if key == 'timestamp':
+            if key in ('timestamp', 'subsystems'):
                 continue
             if isinstance(value, (int, float)) and not isinstance(value, bool):
                 metrics.append(format_prometheus_metric(key, value, base_labels, timestamp_ms))
 
-        # Process nested subsystems (if exists)
-        # ... (EPS, Thermal, AOCS, Comm, Payload 처리 로직은 동일하게 유지)
+        # Process SMAP subsystems structure
+        if 'subsystems' in telemetry_data and isinstance(telemetry_data['subsystems'], dict):
+            subsystems = telemetry_data['subsystems']
+
+            for subsystem_name, subsystem_data in subsystems.items():
+                if not isinstance(subsystem_data, dict):
+                    continue
+
+                # Extract features array from subsystem
+                features = subsystem_data.get('features', [])
+                if isinstance(features, list):
+                    # Create metrics for each feature
+                    for idx, feature_value in enumerate(features):
+                        if isinstance(feature_value, (int, float)) and not isinstance(feature_value, bool):
+                            # 단일 메트릭 이름 사용, 서브시스템과 특징은 레이블로 구분
+                            subsystem_labels = base_labels.copy()
+                            subsystem_labels['subsystem'] = subsystem_name
+                            subsystem_labels['feature_index'] = str(idx)
+                            metrics.append(format_prometheus_metric(
+                                'smap_feature',  # 단일 메트릭 이름
+                                feature_value,
+                                subsystem_labels,
+                                timestamp_ms
+                            ))
 
         # Write to VictoriaMetrics
         if metrics:
             await write_to_victoria_metrics(session, metrics)
-            logger.debug(f"Processed telemetry from {satellite_id}: {len(metrics)} metrics")
+            logger.info(f"Processed telemetry from {satellite_id}: {len(metrics)} metrics")
 
     except Exception as e:
         logger.error(f"Error processing telemetry data: {e}", exc_info=True)
@@ -333,6 +343,8 @@ async def consume_messages():
                         try:
                             data = message.value
                             topic = message.topic
+
+                            logger.info(f"Received message from topic: {topic}")
 
                             # Process based on topic
                             if topic == KAFKA_TOPIC_TELEMETRY:

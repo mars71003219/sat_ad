@@ -59,6 +59,7 @@ coverage.xml
 /tranad/checkpoints/
 
 *.ckpt
+*.onnx
 
 # Triton 모델 파일 (용량이 크므로 Git 제외)
 onnx/*/1/*.onnx
